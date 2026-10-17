@@ -1,0 +1,8 @@
+.env
+service_account.json
+.venv
+.git
+.pytest_cache
+__pycache__
+tests
+.vscode

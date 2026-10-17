@@ -3,3 +3,5 @@ service_account.json
 __pycache__/
 .pytest_cache/
 .venv/
+.yaml
+env.yaml

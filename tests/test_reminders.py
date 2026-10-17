@@ -13,12 +13,11 @@ def test_next_occurrence_clamps_day_to_month_length():
 
 
 def test_due_reminder_fires_in_window():
-    rules = [BillingRule(card="DBS Altitude", closing_day=5, due_day=19, min_payment="$50")]
+    rules = [BillingRule(card="DBS Altitude", closing_day=5, due_day=19)]
     messages = due_reminders(rules, date(2026, 10, 12))
     assert len(messages) == 1
     assert "DBS Altitude" in messages[0]
     assert "in 7 day(s)" in messages[0]
-    assert "$50" in messages[0]
 
 
 def test_no_reminder_outside_windows():

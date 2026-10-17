@@ -19,7 +19,7 @@ TRANSACTION_HEADERS = [
     "Card", "Merchant/Notes", "Raw Message", "Logged At",
 ]
 CARD_HEADERS = ["Card", "Issuer", "Reward Type", "Category Rules", "Min Spend", "Notes"]
-BILLING_HEADERS = ["Card", "Statement Closing Day", "Payment Due Day", "Min Payment", "Notes"]
+BILLING_HEADERS = ["Card", "Statement Closing Day", "Payment Due Day", "Notes"]
 STATE_HEADERS = ["Key", "Value"]
 
 
@@ -42,7 +42,6 @@ class BillingRule:
     card: str
     closing_day: int
     due_day: int
-    min_payment: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,12 +103,7 @@ def row_to_billing(row: dict) -> Optional[BillingRule]:
         return None
     if not card or not (1 <= closing <= 31 and 1 <= due <= 31):
         return None
-    return BillingRule(
-        card=card,
-        closing_day=closing,
-        due_day=due,
-        min_payment=str(row.get("Min Payment", "")),
-    )
+    return BillingRule(card=card, closing_day=closing, due_day=due)
 
 
 def filter_transactions(transactions: list[Transaction], query: TransactionQuery) -> list[Transaction]:

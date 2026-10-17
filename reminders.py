@@ -27,8 +27,7 @@ def due_reminders(rules: list[BillingRule], today: date) -> list[str]:
         days_to_due = (due - today).days
         if days_to_due in REMINDER_WINDOWS:
             when = "today" if days_to_due == 0 else f"in {days_to_due} day(s)"
-            min_pay = f" Min payment: {rule.min_payment}." if rule.min_payment else ""
-            messages.append(f"💳 {rule.card}: payment due {when} ({due:%d %b %Y}).{min_pay}")
+            messages.append(f"💳 {rule.card}: payment due {when} ({due:%d %b %Y}).")
 
         closing = next_occurrence(rule.closing_day, today)
         days_to_closing = (closing - today).days
@@ -48,6 +47,5 @@ def billing_summary(rules: list[BillingRule], today: date) -> str:
         lines.append(
             f"• {rule.card}: closes {closing:%d %b} ({(closing - today).days}d), "
             f"due {due:%d %b} ({(due - today).days}d)"
-            + (f", min {rule.min_payment}" if rule.min_payment else "")
         )
     return "\n".join(lines)

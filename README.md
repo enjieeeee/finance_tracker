@@ -16,7 +16,7 @@ Create a spreadsheet with three tabs and these headers in row 1:
 |---|---|
 | `Transactions` | `Date, Time, User, Category, Amount, Currency, Card, Merchant/Notes, Raw Message, Logged At` |
 | `Cards` | `Card, Issuer, Reward Type, Category Rules, Min Spend, Notes` |
-| `Billing` | `Card, Statement Closing Day, Payment Due Day, Min Payment, Notes` |
+| `Billing` | `Card, Statement Closing Day, Payment Due Day, Notes` |
 
 Example `Cards` row: `DBS Altitude | DBS | miles | dining 3mpd; online 3mpd; other 1.2mpd | - | SIA partner`.
 `Billing` uses plain day numbers (e.g. closing `5`, due `25`).
