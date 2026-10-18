@@ -27,6 +27,14 @@ def test_row_to_transaction_accepts_formatted_amount_and_dd_mm_yyyy_dates():
     assert t.amount == 1234.50
 
 
+def test_row_to_transaction_maps_merchant_separately_from_notes():
+    row = {"Date": "05/10/2026", "Time": "12:30", "User": "Jeslin", "Category": "Dining",
+           "Amount": "12", "Currency": "SGD", "Card": "DBS", "Merchant": "Koufu", "Notes": "lunch"}
+    t = row_to_transaction(row)
+    assert t.merchant == "Koufu"
+    assert t.notes == "lunch"
+
+
 def test_row_to_transaction_skips_rows_without_amount():
     assert row_to_transaction({"Date": "2026-10-05", "Amount": ""}) is None
 

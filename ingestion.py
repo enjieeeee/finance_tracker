@@ -1,37 +1,64 @@
+import hashlib
 import logging
 from datetime import datetime
+from typing import Optional
 
 from googleapiclient.errors import HttpError
 
 from config import Settings
-from gemini_service import GeminiService
+from gemini_service import CATEGORIES, GeminiService
 from gmail_service import GmailClient, is_relevant
 from sheets_service import SheetsService, Transaction, parse_date
 
 logger = logging.getLogger(__name__)
 
 GMAIL_HISTORY_KEY = "gmail_history_id"
+IOS_KEY_PREFIX = "ios:"
+FALLBACK_CATEGORY = "Others"
+
+
+def ios_dedupe_key(text: str, sender: str, day: str) -> str:
+    """Stable key for one notification. Whitespace and case differences are ignored."""
+    normalized = " ".join(text.lower().split())
+    digest = hashlib.sha256(f"{sender}|{day}|{normalized}".encode()).hexdigest()[:16]
+    return f"{IOS_KEY_PREFIX}{digest}"
 
 
 def log_ios_expense(text: str, sender: str, gemini: GeminiService, sheets: SheetsService,
-                    settings: Settings, now: datetime) -> Transaction:
-    """Parse an Apple Pay notification and append it. Raises ValueError if no amount."""
+                    settings: Settings, now: datetime, card: str = "") -> Optional[Transaction]:
+    """Parse an Apple Pay notification and append it.
+
+    Returns None if the same notification was already logged today.
+    Raises ValueError if no amount is found.
+    """
+    key = ios_dedupe_key(text, sender, now.date().isoformat())
+    if any(t.raw.startswith(key) for t in sheets.load_transactions()):
+        logger.info("Skipping duplicate iOS notification %s", key)
+        return None
     fields = gemini.parse_expense(text, sender, now.date())
-    txn = build_transaction(fields, sender, text, settings, now)
+    txn = build_transaction(fields, sender, f"{key} | {text}", settings, now, card_override=card)
     sheets.append_transaction(txn)
     return txn
 
 
+def normalize_category(value: str) -> str:
+    for category in CATEGORIES:
+        if value and value.strip().lower() == category.lower():
+            return category
+    return FALLBACK_CATEGORY
+
+
 def build_transaction(fields: dict, sender: str, raw: str, settings: Settings,
-                      now: datetime) -> Transaction:
+                      now: datetime, card_override: str = "") -> Transaction:
     return Transaction(
         date=parse_date(fields.get("date", "")) or now.date(),
         time=fields.get("time") or now.strftime("%H:%M"),
         user=sender,
-        category=fields.get("category") or "Other",
+        category=normalize_category(fields.get("category", "")),
         amount=float(fields["amount"]),
         currency=fields.get("currency") or settings.default_currency,
-        card=fields.get("card") or "Unknown",
+        card=card_override.strip() or fields.get("card") or "Unknown",
+        merchant=fields.get("merchant", ""),
         notes=fields.get("notes", ""),
         raw=raw,
         logged_at=now.isoformat(timespec="seconds"),

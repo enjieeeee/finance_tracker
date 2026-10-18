@@ -12,18 +12,21 @@ THOUGHT = "thought"
 ANSWER = "answer"
 StreamChunk = tuple[str, str]
 
+CATEGORIES = ("Groceries", "Dining", "Transport", "Shopping", "Bills", "Others")
+
 EXPENSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "date": {"type": "STRING", "description": "YYYY-MM-DD, or empty if not stated"},
         "time": {"type": "STRING", "description": "HH:MM 24-hour, or empty if not stated"},
-        "category": {"type": "STRING"},
+        "category": {"type": "STRING", "enum": list(CATEGORIES)},
         "amount": {"type": "NUMBER"},
         "currency": {"type": "STRING", "description": "ISO code, or empty if not stated"},
-        "card": {"type": "STRING", "description": "Card name as written, or empty"},
-        "notes": {"type": "STRING", "description": "Merchant or short description"},
+        "card": {"type": "STRING", "description": "Bank plus card name, or empty"},
+        "merchant": {"type": "STRING", "description": "Merchant name, or empty"},
+        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
-    "required": ["date", "time", "category", "amount", "currency", "card", "notes"],
+    "required": ["date", "time", "category", "amount", "currency", "card", "merchant", "notes"],
 }
 
 EMAIL_SCHEMA = {
@@ -32,14 +35,19 @@ EMAIL_SCHEMA = {
         "direction": {"type": "STRING", "enum": ["outgoing", "incoming", "none"]},
         "date": {"type": "STRING", "description": "YYYY-MM-DD, or empty if not stated"},
         "time": {"type": "STRING", "description": "HH:MM 24-hour, or empty if not stated"},
-        "category": {"type": "STRING"},
+        "category": {"type": "STRING", "enum": list(CATEGORIES)},
         "amount": {"type": "NUMBER"},
         "currency": {"type": "STRING", "description": "ISO code, or empty if not stated"},
         "card": {"type": "STRING", "description": "Payment method, or empty"},
-        "notes": {"type": "STRING", "description": "Merchant or recipient"},
+        "merchant": {"type": "STRING", "description": "Merchant or recipient name"},
+        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
-    "required": ["direction", "date", "time", "category", "amount", "currency", "card", "notes"],
+    "required": ["direction", "date", "time", "category", "amount", "currency", "card",
+                 "merchant", "notes"],
 }
+
+CATEGORY_RULE = ("- category is exactly one of: Groceries, Dining, Transport, Shopping, Bills, "
+                 "Others.\n")
 
 class GeminiService:
     def __init__(self, api_key: str, model: str):
@@ -93,10 +101,11 @@ class GeminiService:
             f"Today is {today.isoformat()}. The sender is {sender}.\n"
             "Rules:\n"
             "- amount is a plain number without currency symbols.\n"
-            "- category is one of: Food, Transport, Groceries, Utilities, Shopping, "
-            "Travel, Entertainment, Health, Bills, Other.\n"
-            "- Leave date, time, currency or card empty if they are not stated.\n"
-            "- Keep card names as the user wrote them (e.g. 'DBS card').\n\n"
+            + CATEGORY_RULE +
+            "- merchant is the shop, restaurant or payee name.\n"
+            "- card is bank plus card name (e.g. 'DBS Altitude'). If only the bank is named, "
+            "use the bank (e.g. 'DBS' from 'DBS: SGD 14.50 charged...'). Leave empty if unknown.\n"
+            "- Leave date, time or currency empty if they are not stated.\n\n"
             f'Message: """{message}"""'
         )
         data = self._json(prompt, EXPENSE_SCHEMA)
@@ -119,10 +128,9 @@ class GeminiService:
             "- direction: 'outgoing' for money the couple paid out, 'incoming' for money received, "
             "'none' if it is not a transaction (promotions, statements without a charge, OTPs).\n"
             "- amount is a plain number without currency symbols.\n"
-            "- notes is the merchant or recipient name.\n"
+            "- merchant is the merchant or recipient name.\n"
             "- card is the payment method, e.g. 'PayNow DBS' or 'DBS card'.\n"
-            "- category is one of: Food, Transport, Groceries, Utilities, Shopping, "
-            "Travel, Entertainment, Health, Bills, Other.\n"
+            + CATEGORY_RULE +
             "- Leave date, time, currency or card empty if they are not stated.\n\n"
             f'Subject: """{subject}"""\nFrom: """{sender}"""\nBody: """{body}"""'
         )

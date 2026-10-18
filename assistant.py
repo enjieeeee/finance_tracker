@@ -29,7 +29,7 @@ def _string_arg(args: dict, key: str) -> str:
 
 def format_row(t: Transaction) -> str:
     return (f"{t.date.isoformat()} {t.time} | user={t.user} | category={t.category} | "
-            f"amount={t.amount:.2f} {t.currency} | card={t.card} | notes={t.notes}")
+            f"amount={t.amount:.2f} {t.currency} | card={t.card} | merchant={t.merchant} | notes={t.notes}")
 
 
 _SEARCH_PARAMS = {
@@ -39,7 +39,7 @@ _SEARCH_PARAMS = {
         "end_date": {"type": "STRING", "description": "YYYY-MM-DD, or empty"},
         "category": {"type": "STRING", "description": "Category keyword, or empty"},
         "card": {"type": "STRING", "description": "Card keyword, or empty"},
-        "merchant": {"type": "STRING", "description": "Merchant or notes keyword, e.g. Grab, or empty"},
+        "merchant": {"type": "STRING", "description": "Merchant keyword, e.g. Grab, or empty"},
         "user": {"type": "STRING", "description": "Person name, or empty"},
     },
 }
@@ -49,11 +49,12 @@ _LOG_PARAMS = {
     "properties": {
         "date": {"type": "STRING", "description": "YYYY-MM-DD, or empty for today"},
         "time": {"type": "STRING", "description": "HH:MM 24-hour, or empty for now"},
-        "category": {"type": "STRING", "description": "Travel, Entertainment, Health, Bills, Other, or similar"},
+        "category": {"type": "STRING", "description": "One of: Groceries, Dining, Transport, Shopping, Bills, Others"},
         "amount": {"type": "NUMBER", "description": "Plain number, no currency symbol"},
         "currency": {"type": "STRING", "description": "ISO code, or empty for the default"},
         "card": {"type": "STRING", "description": "Card or payment method, or empty"},
-        "notes": {"type": "STRING", "description": "Merchant or short description"},
+        "merchant": {"type": "STRING", "description": "Merchant or payee name, or empty"},
+        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
     "required": ["category", "amount", "notes"],
 }

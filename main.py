@@ -237,13 +237,16 @@ def create_app() -> FastAPI:
         if not text:
             raise HTTPException(status_code=422, detail="Missing 'text'")
 
+        card = str(payload.get("card", "")).strip() or None
         now = datetime.now(settings.tz)
         try:
             txn = await asyncio.to_thread(
                 log_ios_expense, text, sender, telegram_app.bot_data["gemini"],
-                telegram_app.bot_data["sheets"], settings, now)
+                telegram_app.bot_data["sheets"], settings, now, card=card)
         except ValueError:
             raise HTTPException(status_code=422, detail="No amount found in notification")
+        if txn is None:
+            return {"ok": True, "duplicate": True}
         await _notify_allowed_users(telegram_app.bot, settings, f"💳 Apple Pay logged: {_format_saved(txn)}")
         return {"ok": True, "saved": _format_saved(txn)}
 

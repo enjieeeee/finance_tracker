@@ -16,7 +16,7 @@ STATE_TAB = "State"
 
 TRANSACTION_HEADERS = [
     "Date", "Time", "User", "Category", "Amount", "Currency",
-    "Card", "Merchant/Notes", "Raw Message", "Logged At",
+    "Card", "Merchant", "Notes", "Raw Message", "Logged At",
 ]
 CARD_HEADERS = ["Card Holder", "Card", "Issuer", "Reward Type", "Category Rules", "Min Spend",
                 "Key Exceptions & Traps to Avoid"]
@@ -34,6 +34,7 @@ class Transaction:
     currency: str
     card: str
     notes: str
+    merchant: str = ""
     raw: str = ""
     logged_at: str = ""
 
@@ -90,7 +91,8 @@ def row_to_transaction(row: dict) -> Optional[Transaction]:
         amount=amount,
         currency=str(row.get("Currency", "")),
         card=str(row.get("Card", "")),
-        notes=str(row.get("Merchant/Notes", "")),
+        merchant=str(row.get("Merchant") or row.get("Merchant/Notes", "")),
+        notes=str(row.get("Notes", "")),
         raw=str(row.get("Raw Message", "")),
         logged_at=str(row.get("Logged At", "")),
     )
@@ -123,7 +125,7 @@ def filter_transactions(transactions: list[Transaction], query: TransactionQuery
                 and contains(t.card, query.card)
                 and contains(t.user, query.user)):
             continue
-        if not contains(f"{t.notes} {t.raw}", query.merchant):
+        if not contains(f"{t.merchant} {t.notes} {t.raw}", query.merchant):
             continue
         matches.append(t)
     return sorted(matches, key=lambda t: (t.date, t.time))
@@ -155,7 +157,7 @@ class SheetsService:
     def append_transaction(self, t: Transaction) -> None:
         self._spreadsheet.worksheet(TRANSACTIONS_TAB).append_row(
             [t.date.isoformat(), t.time, t.user, t.category, t.amount, t.currency,
-             t.card, t.notes, t.raw, t.logged_at],
+             t.card, t.merchant, t.notes, t.raw, t.logged_at],
             value_input_option="RAW",
         )
 

@@ -94,7 +94,8 @@ def test_ios_expense_is_appended_with_defaults():
     assert txn.amount == 14.5
     assert txn.currency == "SGD"
     assert txn.card == "Unknown"
-    assert txn.raw == "DBS: SGD 14.50 charged at NTUC via Apple Pay"
+    assert txn.raw.startswith("ios:")
+    assert txn.raw.endswith("| DBS: SGD 14.50 charged at NTUC via Apple Pay")
     assert txn.date == date(2026, 10, 17)
 
 
@@ -103,6 +104,26 @@ def test_ios_expense_without_amount_appends_nothing():
     with pytest.raises(ValueError):
         log_ios_expense("Your OTP is 123456", "En Jie", FakeGemini(), sheets, make_settings(), NOW)
     assert sheets.transactions == []
+
+
+def test_ios_duplicate_notification_is_skipped():
+    gemini = FakeGemini(expense={"amount": 14.5, "category": "Groceries", "merchant": "NTUC"})
+    sheets = FakeSheets()
+    first = log_ios_expense("DBS: SGD 14.50 at NTUC", "En Jie", gemini, sheets, make_settings(), NOW)
+    second = log_ios_expense("dbs:  SGD 14.50 at ntuc", "En Jie", gemini, sheets, make_settings(), NOW)
+    assert first is not None
+    assert second is None
+    assert len(sheets.transactions) == 1
+
+
+def test_ios_payload_card_overrides_gemini_card_and_unknown_category_maps_to_others():
+    gemini = FakeGemini(expense={"amount": 9, "category": "Food", "card": "Citi",
+                                 "merchant": "Koufu"})
+    txn = log_ios_expense("Citi: SGD 9 at Koufu", "En Jie", gemini, FakeSheets(),
+                          make_settings(), NOW, card="DBS Altitude")
+    assert txn.card == "DBS Altitude"
+    assert txn.category == "Others"
+    assert txn.merchant == "Koufu"
 
 
 def test_gmail_first_push_only_stores_history_id():
