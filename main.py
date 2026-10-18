@@ -23,6 +23,7 @@ from gemini_service import GeminiService
 from gmail_service import GmailClient, decode_push_history_id
 from ingestion import build_transaction, log_ios_expense, sync_gmail
 from reminders import billing_summary, due_reminders
+from streaming import set_status, stream_reply
 from sheets_service import (
     SheetsService,
     Transaction,
@@ -90,29 +91,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = message.text.strip()
     now = datetime.now(settings.tz)
 
+    placeholder = await message.reply_text("⏳ Understanding your message…")
     intent = await asyncio.to_thread(gemini.classify_intent, text)
     if intent == "expense":
-        await _log_expense(update, text, settings, gemini, sheets, now)
+        await _log_expense(update, placeholder, text, settings, gemini, sheets, now)
     elif intent == "recommend":
         cards_text = await asyncio.to_thread(sheets.load_cards_text)
-        answer = await asyncio.to_thread(gemini.recommend_card, text, cards_text)
-        await message.reply_text(answer)
+        await stream_reply(placeholder, gemini.recommend_card_stream(text, cards_text),
+                           status="💳 Checking your card rules…")
     else:
-        await _answer_history(message, text, settings, gemini, sheets, now.date())
+        await _answer_history(placeholder, text, settings, gemini, sheets, now.date())
 
 
-async def _log_expense(update, text, settings, gemini, sheets, now) -> None:
+async def _log_expense(update, placeholder, text, settings, gemini, sheets, now) -> None:
     sender = _sender(update)
+    await set_status(placeholder, "🧾 Parsing expense…")
     try:
         fields = await asyncio.to_thread(gemini.parse_expense, text, sender, now.date())
     except ValueError:
-        await update.effective_message.reply_text(
+        await placeholder.edit_text(
             "I couldn't find an amount in that. Try e.g. \"Taxi to airport $25\".")
         return
 
     txn = build_transaction(fields, sender, text, settings, now)
     await asyncio.to_thread(sheets.append_transaction, txn)
-    await update.effective_message.reply_text(f"✅ Saved: {_format_saved(txn)}")
+    await placeholder.edit_text(f"✅ Saved: {_format_saved(txn)}")
 
 
 def _format_saved(txn: Transaction) -> str:
@@ -128,7 +131,8 @@ async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
             logger.exception("Could not notify user %s", user_id)
 
 
-async def _answer_history(message, text, settings, gemini, sheets, today) -> None:
+async def _answer_history(placeholder, text, settings, gemini, sheets, today) -> None:
+    await set_status(placeholder, "🔎 Searching transactions…")
     plan = await asyncio.to_thread(gemini.plan_query, text, today)
     query = TransactionQuery(
         start=parse_date(plan.get("start_date", "")),
@@ -141,12 +145,13 @@ async def _answer_history(message, text, settings, gemini, sheets, today) -> Non
     transactions = await asyncio.to_thread(sheets.load_transactions)
     matches = filter_transactions(transactions, query)
     if not matches:
-        await message.reply_text("No matching transactions found.")
+        await placeholder.edit_text("No matching transactions found.")
         return
     rows = [_format_row(t) for t in matches[-MAX_HISTORY_ROWS:]]
     total = sum(t.amount for t in matches)
-    answer = await asyncio.to_thread(gemini.answer_question, text, rows, today)
-    await message.reply_text(f"{answer}\n\n({len(matches)} matching rows, total {total:,.2f})")
+    footer = f"\n\n({len(matches)} matching rows, total {total:,.2f})"
+    await stream_reply(placeholder, gemini.answer_question_stream(text, rows, today),
+                       status="🧠 Reading your transactions…", footer=footer)
 
 
 @allowed_only

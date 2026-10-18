@@ -1,11 +1,16 @@
 import json
 import logging
 from datetime import date
+from typing import Iterator
 
 from google import genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
+
+THOUGHT = "thought"
+ANSWER = "answer"
+StreamChunk = tuple[str, str]
 
 INTENTS = ("expense", "history", "recommend")
 
@@ -88,6 +93,24 @@ class GeminiService:
         logger.debug("Gemini text response: %s", text)
         return text
 
+    def _stream(self, prompt: str) -> Iterator[StreamChunk]:
+        """Yield (THOUGHT | ANSWER, text) pieces as Gemini produces them."""
+        stream = self._client.models.generate_content_stream(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                thinking_config=types.ThinkingConfig(include_thoughts=True),
+            ),
+        )
+        for chunk in stream:
+            for candidate in chunk.candidates or []:
+                if not (candidate.content and candidate.content.parts):
+                    continue
+                for part in candidate.content.parts:
+                    if part.text:
+                        yield (THOUGHT if part.thought else ANSWER, part.text)
+
     def classify_intent(self, message: str) -> str:
         prompt = (
             "Classify this Telegram message from a couple's finance bot.\n"
@@ -151,22 +174,34 @@ class GeminiService:
         return self._json(prompt, QUERY_SCHEMA)
 
     def answer_question(self, question: str, rows: list[str], today: date) -> str:
-        prompt = (
-            f"Today is {today.isoformat()}. Answer the question using ONLY the transactions below.\n"
-            "Quote exact dates, times, amounts and card names from the rows. "
-            "If the rows do not answer it, say so. Be brief.\n\n"
-            "Transactions:\n" + "\n".join(rows) + f'\n\nQuestion: """{question}"""'
-        )
-        return self._text(prompt)
+        return self._text(_answer_prompt(question, rows, today))
+
+    def answer_question_stream(self, question: str, rows: list[str], today: date) -> Iterator[StreamChunk]:
+        return self._stream(_answer_prompt(question, rows, today))
 
     def recommend_card(self, question: str, cards_text: str) -> str:
-        prompt = (
-            "You are a credit card rewards advisor for a couple in Singapore.\n"
-            "Using ONLY the card rules below, recommend the single best card for the purchase "
-            "to maximise cashback or miles. Give the card, the rule it relies on, and the "
-            "expected return. If no card rule applies, say which is the safest default and "
-            "that the rule is unknown.\n\n"
-            f"Card rules:\n{cards_text or '(no cards recorded)'}\n\n"
-            f'Purchase: """{question}"""'
-        )
-        return self._text(prompt)
+        return self._text(_recommend_prompt(question, cards_text))
+
+    def recommend_card_stream(self, question: str, cards_text: str) -> Iterator[StreamChunk]:
+        return self._stream(_recommend_prompt(question, cards_text))
+
+
+def _answer_prompt(question: str, rows: list[str], today: date) -> str:
+    return (
+        f"Today is {today.isoformat()}. Answer the question using ONLY the transactions below.\n"
+        "Quote exact dates, times, amounts and card names from the rows. "
+        "If the rows do not answer it, say so. Be brief.\n\n"
+        "Transactions:\n" + "\n".join(rows) + f'\n\nQuestion: """{question}"""'
+    )
+
+
+def _recommend_prompt(question: str, cards_text: str) -> str:
+    return (
+        "You are a credit card rewards advisor for a couple in Singapore.\n"
+        "Using ONLY the card rules below, recommend the single best card for the purchase "
+        "to maximise cashback or miles. Give the card, the rule it relies on, and the "
+        "expected return. If no card rule applies, say which is the safest default and "
+        "that the rule is unknown.\n\n"
+        f"Card rules:\n{cards_text or '(no cards recorded)'}\n\n"
+        f'Purchase: """{question}"""'
+    )

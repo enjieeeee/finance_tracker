@@ -18,7 +18,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from config import load_settings
-from gemini_service import GeminiService
+from gemini_service import THOUGHT, GeminiService
 from reminders import billing_summary
 from sheets_service import (
     SheetsService,
@@ -31,8 +31,26 @@ from sheets_service import (
 SENDER = "DevConsole"
 
 
+def print_stream(chunks):
+    """Print thought summaries dimmed, then the answer, as they arrive."""
+    announced_thinking = announced_answer = False
+    for kind, text in chunks:
+        if kind == THOUGHT:
+            if not announced_thinking:
+                print("[thinking]")
+                announced_thinking = True
+            print(f"\033[2m{text}\033[0m", end="", flush=True)
+        else:
+            if not announced_answer:
+                print("\n[answer]")
+                announced_answer = True
+            print(text, end="", flush=True)
+    print()
+
+
 def run_message(text, settings, gemini, sheets, write):
     now = datetime.now(settings.tz)
+    print("[status] classifying...")
     intent = gemini.classify_intent(text)
     print(f"[intent] {intent}")
 
@@ -60,7 +78,8 @@ def run_message(text, settings, gemini, sheets, write):
     elif intent == "recommend":
         cards_text = sheets.load_cards_text()
         print(f"[cards] {len(cards_text.splitlines())} card rule line(s) loaded")
-        print(gemini.recommend_card(text, cards_text))
+        print("[status] checking card rules...")
+        print_stream(gemini.recommend_card_stream(text, cards_text))
 
     else:
         plan = gemini.plan_query(text, now.date())
@@ -80,7 +99,7 @@ def run_message(text, settings, gemini, sheets, write):
         if matches:
             rows = [f"{t.date} {t.time} | {t.user} | {t.category} | {t.amount:.2f} {t.currency} | {t.card} | {t.notes}"
                     for t in matches[-200:]]
-            print(gemini.answer_question(text, rows, now.date()))
+            print_stream(gemini.answer_question_stream(text, rows, now.date()))
         else:
             print("No matching transactions found.")
 
