@@ -30,7 +30,10 @@ def test_stream_separates_thoughts_from_answer():
         _chunk(_part("You spent $15."), _part("")),
     ]))
 
-    assert list(service._stream("prompt")) == [(THOUGHT, "Checking rows"), (ANSWER, "You spent $15.")]
+    collected = []
+    chunks = list(service.stream_turn([], "system", [], collected))
+
+    assert chunks == [(THOUGHT, "Checking rows"), (ANSWER, "You spent $15.")]
 
 
 class FakeMessage:

@@ -17,20 +17,15 @@ from telegram.ext import (
     filters,
 )
 
+from assistant import Assistant
 from chart_generator import render_dashboard
 from config import Settings, load_settings
 from gemini_service import GeminiService
 from gmail_service import GmailClient, decode_push_history_id
-from ingestion import build_transaction, log_ios_expense, sync_gmail
+from ingestion import log_ios_expense, sync_gmail
 from reminders import billing_summary, due_reminders
-from streaming import set_status, stream_reply
-from sheets_service import (
-    SheetsService,
-    Transaction,
-    TransactionQuery,
-    filter_transactions,
-    parse_date,
-)
+from streaming import stream_reply
+from sheets_service import SheetsService, Transaction
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -40,15 +35,16 @@ logging.basicConfig(
 WEBHOOK_PATH = "/telegram/webhook"
 IOS_WEBHOOK_PATH = "/webhook/ios"
 GMAIL_WEBHOOK_PATH = "/webhook/gmail"
-MAX_HISTORY_ROWS = 200
 HELP_TEXT = (
-    "Just type naturally:\n"
-    "• Log an expense: \"Lunch at hawker center $15, DBS card, En Jie\"\n"
-    "• Ask history: \"How much did I spend on Grab last week?\"\n"
-    "• Ask for a card: \"Buying flight tickets on SIA website, which card?\"\n\n"
+    "Chat with me naturally. I can:\n"
+    "• Log spending: \"Lunch at hawker center $15 on DBS\"\n"
+    "• Answer questions: \"How much did I spend on Grab last week?\"\n"
+    "• Suggest a card: \"Buying flight tickets on SIA website, which card?\"\n"
+    "• Check billing: \"When is my next card payment due?\"\n\n"
     "Commands:\n"
     "/dashboard [YYYY-MM] - spending charts for a month\n"
-    "/reminders - credit card closing and due dates"
+    "/reminders - credit card closing and due dates\n"
+    "/clear - forget this conversation"
 )
 
 
@@ -72,50 +68,32 @@ def _sender(update: Update) -> str:
     return (user.first_name or str(user.id)) if user else "Unknown"
 
 
-def _format_row(t: Transaction) -> str:
-    return (f"{t.date.isoformat()} {t.time} | user={t.user} | category={t.category} | "
-            f"amount={t.amount:.2f} {t.currency} | card={t.card} | notes={t.notes}")
-
-
 @allowed_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(HELP_TEXT)
 
 
 @allowed_only
+async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.bot_data["assistant"].clear(update.effective_chat.id)
+    await update.effective_message.reply_text("Conversation cleared.")
+
+
+@allowed_only
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
-    gemini: GeminiService = context.bot_data["gemini"]
-    sheets: SheetsService = context.bot_data["sheets"]
+    assistant: Assistant = context.bot_data["assistant"]
     message = update.effective_message
     text = message.text.strip()
-    now = datetime.now(settings.tz)
 
-    placeholder = await message.reply_text("⏳ Understanding your message…")
-    intent = await asyncio.to_thread(gemini.classify_intent, text)
-    if intent == "expense":
-        await _log_expense(update, placeholder, text, settings, gemini, sheets, now)
-    elif intent == "recommend":
-        cards_text = await asyncio.to_thread(sheets.load_cards_text)
-        await stream_reply(placeholder, gemini.recommend_card_stream(text, cards_text),
-                           status="💳 Checking your card rules…")
-    else:
-        await _answer_history(placeholder, text, settings, gemini, sheets, now.date())
-
-
-async def _log_expense(update, placeholder, text, settings, gemini, sheets, now) -> None:
-    sender = _sender(update)
-    await set_status(placeholder, "🧾 Parsing expense…")
+    placeholder = await message.reply_text("🧠 Thinking…")
+    chunks = assistant.respond(update.effective_chat.id, _sender(update), text,
+                               datetime.now(settings.tz))
     try:
-        fields = await asyncio.to_thread(gemini.parse_expense, text, sender, now.date())
-    except ValueError:
-        await placeholder.edit_text(
-            "I couldn't find an amount in that. Try e.g. \"Taxi to airport $25\".")
-        return
-
-    txn = build_transaction(fields, sender, text, settings, now)
-    await asyncio.to_thread(sheets.append_transaction, txn)
-    await placeholder.edit_text(f"✅ Saved: {_format_saved(txn)}")
+        await stream_reply(placeholder, chunks, status="🧠 Thinking…")
+    except Exception:
+        logger.exception("Assistant failed")
+        await placeholder.edit_text("Sorry, I couldn't process that. Please try again.")
 
 
 def _format_saved(txn: Transaction) -> str:
@@ -129,29 +107,6 @@ async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
             await bot.send_message(chat_id=user_id, text=text)
         except Exception:
             logger.exception("Could not notify user %s", user_id)
-
-
-async def _answer_history(placeholder, text, settings, gemini, sheets, today) -> None:
-    await set_status(placeholder, "🔎 Searching transactions…")
-    plan = await asyncio.to_thread(gemini.plan_query, text, today)
-    query = TransactionQuery(
-        start=parse_date(plan.get("start_date", "")),
-        end=parse_date(plan.get("end_date", "")),
-        category=plan.get("category", ""),
-        card=plan.get("card", ""),
-        merchant=plan.get("merchant", ""),
-        user=plan.get("user", ""),
-    )
-    transactions = await asyncio.to_thread(sheets.load_transactions)
-    matches = filter_transactions(transactions, query)
-    if not matches:
-        await placeholder.edit_text("No matching transactions found.")
-        return
-    rows = [_format_row(t) for t in matches[-MAX_HISTORY_ROWS:]]
-    total = sum(t.amount for t in matches)
-    footer = f"\n\n({len(matches)} matching rows, total {total:,.2f})"
-    await stream_reply(placeholder, gemini.answer_question_stream(text, rows, today),
-                       status="🧠 Reading your transactions…", footer=footer)
 
 
 @allowed_only
@@ -201,16 +156,20 @@ async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).updater(None).build()
+    sheets = SheetsService(settings.google_sheet_id, settings.service_account_json)
+    gemini = GeminiService(settings.gemini_api_key, settings.gemini_model)
     application.bot_data.update(
         settings=settings,
-        sheets=SheetsService(settings.google_sheet_id, settings.service_account_json),
-        gemini=GeminiService(settings.gemini_api_key, settings.gemini_model),
+        sheets=sheets,
+        gemini=gemini,
+        assistant=Assistant(gemini, sheets, settings, write=True),
         gmail=(GmailClient(settings.gmail_client_id, settings.gmail_client_secret,
                            settings.gmail_refresh_token) if settings.gmail_enabled else None),
         gmail_lock=asyncio.Lock(),
     )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
+    application.add_handler(CommandHandler("clear", clear_chat))
     application.add_handler(CommandHandler("dashboard", dashboard))
     application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

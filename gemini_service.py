@@ -12,14 +12,6 @@ THOUGHT = "thought"
 ANSWER = "answer"
 StreamChunk = tuple[str, str]
 
-INTENTS = ("expense", "history", "recommend")
-
-INTENT_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {"intent": {"type": "STRING", "enum": list(INTENTS)}},
-    "required": ["intent"],
-}
-
 EXPENSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -49,20 +41,6 @@ EMAIL_SCHEMA = {
     "required": ["direction", "date", "time", "category", "amount", "currency", "card", "notes"],
 }
 
-QUERY_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "start_date": {"type": "STRING", "description": "YYYY-MM-DD or empty"},
-        "end_date": {"type": "STRING", "description": "YYYY-MM-DD or empty"},
-        "category": {"type": "STRING", "description": "Category keyword or empty"},
-        "card": {"type": "STRING", "description": "Card keyword or empty"},
-        "merchant": {"type": "STRING", "description": "Merchant or notes keyword, e.g. Grab, or empty"},
-        "user": {"type": "STRING", "description": "Person name or empty"},
-    },
-    "required": ["start_date", "end_date", "category", "card", "merchant", "user"],
-}
-
-
 class GeminiService:
     def __init__(self, api_key: str, model: str):
         self._client = genai.Client(api_key=api_key)
@@ -82,23 +60,16 @@ class GeminiService:
         logger.debug("Gemini JSON response: %s", response.text)
         return json.loads(response.text)
 
-    def _text(self, prompt: str) -> str:
-        logger.debug("Gemini text prompt:\n%s", prompt)
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2),
-        )
-        text = (response.text or "").strip()
-        logger.debug("Gemini text response: %s", text)
-        return text
-
-    def _stream(self, prompt: str) -> Iterator[StreamChunk]:
-        """Yield (THOUGHT | ANSWER, text) pieces as Gemini produces them."""
+    def stream_turn(self, contents: list[types.Content], system: str,
+                    tools: list[types.Tool], collected: list[types.Part]) -> Iterator[StreamChunk]:
+        """Stream one model turn. Yields thoughts and answer text; appends the non-thought
+        parts (including function calls and their signatures) to `collected`."""
         stream = self._client.models.generate_content_stream(
             model=self._model,
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
+                system_instruction=system,
+                tools=tools,
                 temperature=0.2,
                 thinking_config=types.ThinkingConfig(include_thoughts=True),
             ),
@@ -108,19 +79,13 @@ class GeminiService:
                 if not (candidate.content and candidate.content.parts):
                     continue
                 for part in candidate.content.parts:
+                    if part.thought:
+                        if part.text:
+                            yield THOUGHT, part.text
+                        continue
+                    collected.append(part)
                     if part.text:
-                        yield (THOUGHT if part.thought else ANSWER, part.text)
-
-    def classify_intent(self, message: str) -> str:
-        prompt = (
-            "Classify this Telegram message from a couple's finance bot.\n"
-            "- expense: they are logging a purchase or payment to record\n"
-            "- history: they are asking about past transactions or spending\n"
-            "- recommend: they ask which credit card to use for a purchase\n\n"
-            f'Message: """{message}"""'
-        )
-        intent = self._json(prompt, INTENT_SCHEMA).get("intent", "history")
-        return intent if intent in INTENTS else "history"
+                        yield ANSWER, part.text
 
     def parse_expense(self, message: str, sender: str, today: date) -> dict:
         prompt = (
@@ -163,45 +128,5 @@ class GeminiService:
         )
         return self._json(prompt, EMAIL_SCHEMA)
 
-    def plan_query(self, question: str, today: date) -> dict:
-        prompt = (
-            "Convert this question about a couple's past transactions into search filters.\n"
-            f"Today is {today.isoformat()}. Resolve relative dates such as 'last week' "
-            "or 'this month' into exact YYYY-MM-DD start_date and end_date.\n"
-            "Leave a field empty if the question does not restrict it.\n\n"
-            f'Question: """{question}"""'
-        )
-        return self._json(prompt, QUERY_SCHEMA)
-
-    def answer_question(self, question: str, rows: list[str], today: date) -> str:
-        return self._text(_answer_prompt(question, rows, today))
-
-    def answer_question_stream(self, question: str, rows: list[str], today: date) -> Iterator[StreamChunk]:
-        return self._stream(_answer_prompt(question, rows, today))
-
-    def recommend_card(self, question: str, cards_text: str) -> str:
-        return self._text(_recommend_prompt(question, cards_text))
-
-    def recommend_card_stream(self, question: str, cards_text: str) -> Iterator[StreamChunk]:
-        return self._stream(_recommend_prompt(question, cards_text))
 
 
-def _answer_prompt(question: str, rows: list[str], today: date) -> str:
-    return (
-        f"Today is {today.isoformat()}. Answer the question using ONLY the transactions below.\n"
-        "Quote exact dates, times, amounts and card names from the rows. "
-        "If the rows do not answer it, say so. Be brief.\n\n"
-        "Transactions:\n" + "\n".join(rows) + f'\n\nQuestion: """{question}"""'
-    )
-
-
-def _recommend_prompt(question: str, cards_text: str) -> str:
-    return (
-        "You are a credit card rewards advisor for a couple in Singapore.\n"
-        "Using ONLY the card rules below, recommend the single best card for the purchase "
-        "to maximise cashback or miles. Give the card, the rule it relies on, and the "
-        "expected return. If no card rule applies, say which is the safest default and "
-        "that the rule is unknown.\n\n"
-        f"Card rules:\n{cards_text or '(no cards recorded)'}\n\n"
-        f'Purchase: """{question}"""'
-    )

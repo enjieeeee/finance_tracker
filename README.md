@@ -4,8 +4,7 @@ A Telegram bot for a couple. It logs expenses to a shared Google Sheet, parses f
 
 ## Features
 - **Log expenses**: "Lunch at hawker center $15, DBS card, En Jie" is parsed and appended to the `Transactions` tab.
-- **History questions**: "How much did I spend on Grab last week?" Filters run in Python and Gemini answers from those rows only.
-- **Card recommendations**: "Buying flight tickets on SIA website, which card?" Gemini uses the `Cards` tab rules.
+- **Chat assistant**: free-form conversation. Gemini decides what to do by calling tools: `search_transactions` (reads the sheet), `log_expense` plus `confirm_expense` (an expense is shown for confirmation before it is saved), `get_cards` (card rules), and `get_billing`. Replies stream in live, with the thinking shown first. Each chat keeps its recent history (20 turns); `/clear` resets it.
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus `/reminders`.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
 
@@ -64,11 +63,11 @@ Run tests with `pytest`.
 
 ### Debug the AI locally (no Telegram needed)
 ```bash
-python dev_console.py          # dry run: shows intent, parsed fields, matches, answers; writes nothing
+python dev_console.py          # dry run: shows thinking, tool calls, and the answer; writes nothing
 python dev_console.py --write  # also appends expenses to the real sheet
 python dev_console.py --debug  # also prints full Gemini prompts and raw JSON responses
 ```
-Type `billing` to see the reminder summary, `quit` to exit. Use this to tune prompts and schemas before deploying.
+Type `billing` to see the reminder summary, `clear` to reset the conversation, `quit` to exit. Use this to tune the system prompt and tools before deploying.
 
 ## 6. Deploy to Cloud Run
 ```bash
@@ -83,5 +82,6 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 \
 
 ## Commands
 - `/start` or `/help`: show usage
+- `/clear`: forget this chat's conversation history
 - `/dashboard [YYYY-MM]`: monthly spending charts
 - `/reminders`: billing cycle summary for all cards
