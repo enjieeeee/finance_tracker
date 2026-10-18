@@ -20,6 +20,10 @@ def next_occurrence(day: int, today: date) -> date:
     return _date_in_month(following.year, following.month, day)
 
 
+def _label(rule: BillingRule) -> str:
+    return f"{rule.card} ({rule.cardholder})" if rule.cardholder else rule.card
+
+
 def due_reminders(rules: list[BillingRule], today: date) -> list[str]:
     messages = []
     for rule in rules:
@@ -27,13 +31,13 @@ def due_reminders(rules: list[BillingRule], today: date) -> list[str]:
         days_to_due = (due - today).days
         if days_to_due in REMINDER_WINDOWS:
             when = "today" if days_to_due == 0 else f"in {days_to_due} day(s)"
-            messages.append(f"💳 {rule.card}: payment due {when} ({due:%d %b %Y}).")
+            messages.append(f"💳 {_label(rule)}: payment due {when} ({due:%d %b %Y}).")
 
         closing = next_occurrence(rule.closing_day, today)
         days_to_closing = (closing - today).days
         if days_to_closing in REMINDER_WINDOWS:
             when = "today" if days_to_closing == 0 else f"in {days_to_closing} day(s)"
-            messages.append(f"🧾 {rule.card}: statement closes {when} ({closing:%d %b %Y}).")
+            messages.append(f"🧾 {_label(rule)}: statement closes {when} ({closing:%d %b %Y}).")
     return messages
 
 
@@ -45,7 +49,7 @@ def billing_summary(rules: list[BillingRule], today: date) -> str:
         closing = next_occurrence(rule.closing_day, today)
         due = next_occurrence(rule.due_day, today)
         lines.append(
-            f"• {rule.card}: closes {closing:%d %b} ({(closing - today).days}d), "
+            f"• {_label(rule)}: closes {closing:%d %b} ({(closing - today).days}d), "
             f"due {due:%d %b} ({(due - today).days}d)"
         )
     return "\n".join(lines)

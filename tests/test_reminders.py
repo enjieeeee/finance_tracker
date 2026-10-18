@@ -1,6 +1,6 @@
 from datetime import date
 
-from reminders import due_reminders, next_occurrence
+from reminders import billing_summary, due_reminders, next_occurrence
 from sheets_service import BillingRule
 
 
@@ -23,3 +23,13 @@ def test_due_reminder_fires_in_window():
 def test_no_reminder_outside_windows():
     rules = [BillingRule(card="Citi", closing_day=5, due_day=25)]
     assert due_reminders(rules, date(2026, 10, 12)) == []
+
+
+def test_billing_summary_tells_same_card_apart_by_cardholder():
+    rules = [
+        BillingRule(card="Preferred Platinum", closing_day=12, due_day=2, cardholder="En Jie"),
+        BillingRule(card="Preferred Platinum", closing_day=12, due_day=2, cardholder="Jeslin"),
+    ]
+    summary = billing_summary(rules, date(2026, 10, 12))
+    assert "Preferred Platinum (En Jie)" in summary
+    assert "Preferred Platinum (Jeslin)" in summary

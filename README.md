@@ -14,10 +14,10 @@ Create a spreadsheet with three tabs and these headers in row 1:
 | Tab | Headers |
 |---|---|
 | `Transactions` | `Date, Time, User, Category, Amount, Currency, Card, Merchant/Notes, Raw Message, Logged At` |
-| `Cards` | `Card, Issuer, Reward Type, Category Rules, Min Spend, Notes` |
-| `Billing` | `Card, Statement Closing Day, Payment Due Day, Notes` |
+| `Cards` | `Card Holder, Card, Issuer, Reward Type, Category Rules, Min Spend, Key Exceptions & Traps to Avoid` |
+| `Billing` | `Cardholder, Card, Statement Closing Day, Payment Due Day, Notes` |
 
-Example `Cards` row: `DBS Altitude | DBS | miles | dining 3mpd; online 3mpd; other 1.2mpd | - | SIA partner`.
+Example `Cards` row: `En Jie | DBS Altitude | DBS | miles | dining 3mpd; online 3mpd; other 1.2mpd | - | SIA partner`.
 `Billing` uses plain day numbers (e.g. closing `5`, due `25`).
 
 Copy the sheet ID from its URL: `docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.

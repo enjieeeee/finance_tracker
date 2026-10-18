@@ -18,8 +18,9 @@ TRANSACTION_HEADERS = [
     "Date", "Time", "User", "Category", "Amount", "Currency",
     "Card", "Merchant/Notes", "Raw Message", "Logged At",
 ]
-CARD_HEADERS = ["Card", "Issuer", "Reward Type", "Category Rules", "Min Spend", "Notes"]
-BILLING_HEADERS = ["Card", "Statement Closing Day", "Payment Due Day", "Notes"]
+CARD_HEADERS = ["Card Holder", "Card", "Issuer", "Reward Type", "Category Rules", "Min Spend",
+                "Key Exceptions & Traps to Avoid"]
+BILLING_HEADERS = ["Cardholder", "Card", "Statement Closing Day", "Payment Due Day", "Notes"]
 STATE_HEADERS = ["Key", "Value"]
 
 
@@ -42,6 +43,7 @@ class BillingRule:
     card: str
     closing_day: int
     due_day: int
+    cardholder: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,8 @@ def row_to_billing(row: dict) -> Optional[BillingRule]:
         return None
     if not card or not (1 <= closing <= 31 and 1 <= due <= 31):
         return None
-    return BillingRule(card=card, closing_day=closing, due_day=due)
+    cardholder = str(row.get("Cardholder", "")).strip()
+    return BillingRule(card=card, closing_day=closing, due_day=due, cardholder=cardholder)
 
 
 def filter_transactions(transactions: list[Transaction], query: TransactionQuery) -> list[Transaction]:
@@ -129,7 +132,7 @@ def filter_transactions(transactions: list[Transaction], query: TransactionQuery
 def cards_as_text(rows: list[dict]) -> str:
     lines = []
     for row in rows:
-        parts = [f"{k}: {v}" for k, v in row.items() if str(v).strip()]
+        parts = [f"{k}: {str(v).strip()}" for k, v in row.items() if str(v).strip()]
         if parts:
             lines.append(" | ".join(parts))
     return "\n".join(lines)
