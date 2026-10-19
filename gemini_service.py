@@ -28,22 +28,6 @@ EXPENSE_SCHEMA = {
     "required": ["date", "time", "category", "amount", "currency", "card", "merchant"],
 }
 
-EMAIL_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "direction": {"type": "STRING", "enum": ["outgoing", "incoming", "none"]},
-        "date": {"type": "STRING", "description": "YYYY-MM-DD, or empty if not stated"},
-        "time": {"type": "STRING", "description": "HH:MM 24-hour, or empty if not stated"},
-        "category": {"type": "STRING", "enum": list(CATEGORIES)},
-        "amount": {"type": "NUMBER"},
-        "currency": {"type": "STRING", "description": "ISO code, or empty if not stated"},
-        "card": {"type": "STRING", "description": "Payment method, or empty"},
-        "merchant": {"type": "STRING", "description": "Merchant or recipient name"},
-    },
-    "required": ["direction", "date", "time", "category", "amount", "currency", "card",
-                 "merchant"],
-}
-
 PAYNOW_MERCHANT_SCHEMA = {
     "type": "OBJECT",
     "properties": {"merchant": {"type": "STRING", "description": "Recipient name, or empty"}},
@@ -121,27 +105,6 @@ class GeminiService:
             raise ValueError("No valid amount found in message")
         data["amount"] = amount
         return data
-
-    def parse_email(self, subject: str, sender: str, body: str, today: date) -> dict:
-        prompt = (
-            "Decide whether this email is a money-OUT transaction for a couple's expense tracker "
-            "(a purchase, bill, PayNow or bank transfer they sent, or an e-commerce receipt), "
-            "and if so extract it.\n"
-            f"Today is {today.isoformat()}.\n"
-            "Rules:\n"
-            "- direction: 'outgoing' for money the couple paid out, 'incoming' for money received, "
-            "'none' if it is not a transaction (promotions, statements without a charge, OTPs).\n"
-            "- amount is a plain number without currency symbols.\n"
-            "- merchant is the merchant or recipient name.\n"
-            "- card is the payment method, e.g. 'PayNow DBS' or 'DBS card'.\n"
-            "- UOB alerts read 'You made a PayNow transfer of SGD 200.00 to NAME ... on your a/c "
-            "ending 3606' (outgoing) or 'You have received SGD 118.29 in your PayNow-linked account "
-            "ending 3606' (incoming). For these, card is 'UOB 3606' and merchant is the NAME.\n"
-            + CATEGORY_RULE +
-            "- Leave date, time, currency or card empty if they are not stated.\n\n"
-            f'Subject: """{subject}"""\nFrom: """{sender}"""\nBody: """{body}"""'
-        )
-        return self._json(prompt, EMAIL_SCHEMA)
 
     def parse_paynow_merchant(self, subject: str, body: str) -> str:
         prompt = (

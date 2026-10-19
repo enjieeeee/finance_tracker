@@ -1,4 +1,3 @@
-
 import asyncio
 import functools
 import hmac
@@ -98,8 +97,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def _format_saved(txn: Transaction) -> str:
-    return (f"{txn.date:%d %b %Y} {txn.time} | {txn.category} | "
-            f"{txn.currency} {txn.amount:,.2f} | {txn.card}")
+    return (f"{txn.date:%d %b %Y} {txn.time} |{txn.card}  "
+            f"{txn.currency} {txn.amount:,.2f}| {txn.merchant}")
 
 
 async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
