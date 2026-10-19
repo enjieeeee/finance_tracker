@@ -3,6 +3,7 @@ import functools
 import hmac
 import logging
 import os
+import shlex
 from contextlib import asynccontextmanager
 from datetime import datetime, time
 
@@ -17,14 +18,13 @@ from telegram.ext import (
     filters,
 )
 
-from assistant import Assistant
 from chart_generator import render_dashboard
 from config import Settings, load_settings
-from gemini_service import GeminiService
 from gmail_service import GmailClient, decode_push_history_id
-from ingestion import log_ios_expense, sync_gmail
+from ingestion import sync_gmail
+from queries import (SEARCH_USAGE, QueryError, format_billing, format_search, format_totals,
+                     parse_month, parse_search)
 from reminders import billing_summary, due_reminders
-from streaming import stream_reply
 from sheets_service import SheetsService, Transaction
 
 logger = logging.getLogger(__name__)
@@ -34,18 +34,18 @@ logging.basicConfig(
 )
 WEBHOOK_PATH = "/telegram/webhook"
 TELEGRAM_MAX_CHARS = 4096
-IOS_WEBHOOK_PATH = "/webhook/ios"
 GMAIL_WEBHOOK_PATH = "/webhook/gmail"
 HELP_TEXT = (
-    "Chat with me naturally. I can:\n"
-    "• Log spending: \"Lunch at hawker center $15 on DBS\"\n"
-    "• Answer questions: \"How much did I spend on Grab last week?\"\n"
-    "• Suggest a card: \"Buying flight tickets on SIA website, which card?\"\n"
-    "• Check billing: \"When is my next card payment due?\"\n\n"
+    "Transactions are logged automatically from Gmail (PayNow and card alerts).\n\n"
     "Commands:\n"
+    "/search <keyword> [YYYY-MM-DD..YYYY-MM-DD] [card=\"...\"] [user=...] [category=...] - find transactions\n"
+    "/total [YYYY-MM] - spending by category for a month\n"
     "/dashboard [YYYY-MM] - spending charts for a month\n"
-    "/reminders - credit card closing and due dates\n"
-    "/clear - forget this conversation"
+    "/cards - card rules and benefits\n"
+    "/billing - statement closing and due days\n"
+    "/reminders - upcoming card closing and due dates\n"
+    "/help - this list\n"
+    "/clear - nothing to clear (no chat memory)"
 )
 
 
@@ -64,11 +64,6 @@ def allowed_only(handler):
     return wrapper
 
 
-def _sender(update: Update) -> str:
-    user = update.effective_user
-    return (user.first_name or str(user.id)) if user else "Unknown"
-
-
 @allowed_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(HELP_TEXT)
@@ -76,26 +71,72 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @allowed_only
 async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.bot_data["assistant"].clear(update.effective_chat.id)
-    await update.effective_message.reply_text("Conversation cleared.")
+    await update.effective_message.reply_text("Nothing to clear. Commands don't keep a conversation.")
 
 
 @allowed_only
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.bot_data["settings"]
-    assistant: Assistant = context.bot_data["assistant"]
-    message = update.effective_message
-    text = message.text.strip()
+    await update.effective_message.reply_text("Free-text chat is off. Send /help to see the commands.")
 
-    placeholder = await message.reply_text("🧠 Thinking…")
-    chunks = assistant.respond(update.effective_chat.id, _sender(update), text,
-                               datetime.now(settings.tz))
+
+def _command_args(message_text: str) -> list[str]:
+    """Arguments after the command name, honouring quotes (e.g. card="UOB Card")."""
+    parts = (message_text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return []
     try:
-        await stream_reply(placeholder, chunks, status="🧠 Thinking…")
-    except Exception as exc:
-        logger.exception("Assistant failed")
-        detail = f"[error] {type(exc).__name__}: {exc}"[:TELEGRAM_MAX_CHARS]
-        await placeholder.edit_text(f"Sorry, I couldn't process that. Please try again.\n{detail}")
+        return shlex.split(parts[1])
+    except ValueError as exc:
+        raise QueryError(f"Could not read arguments: {exc}")
+
+
+async def _reply(message, text: str) -> None:
+    await message.reply_text(text[:TELEGRAM_MAX_CHARS])
+
+
+@allowed_only
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sheets: SheetsService = context.bot_data["sheets"]
+    message = update.effective_message
+    try:
+        args = _command_args(message.text)
+        if not args:
+            raise QueryError(SEARCH_USAGE)
+        query = parse_search(args)
+    except QueryError as exc:
+        await message.reply_text(str(exc))
+        return
+    transactions = await asyncio.to_thread(sheets.load_transactions)
+    await _reply(message, format_search(transactions, query))
+
+
+@allowed_only
+async def total_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.bot_data["settings"]
+    sheets: SheetsService = context.bot_data["sheets"]
+    message = update.effective_message
+    try:
+        args = _command_args(message.text)
+        month = parse_month(args[0] if args else "", datetime.now(settings.tz).date())
+    except QueryError as exc:
+        await message.reply_text(str(exc))
+        return
+    transactions = await asyncio.to_thread(sheets.load_transactions)
+    await _reply(message, format_totals(transactions, month))
+
+
+@allowed_only
+async def cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sheets: SheetsService = context.bot_data["sheets"]
+    text = await asyncio.to_thread(sheets.load_cards_text)
+    await _reply(update.effective_message, text or "No cards found.")
+
+
+@allowed_only
+async def billing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    sheets: SheetsService = context.bot_data["sheets"]
+    rules = await asyncio.to_thread(sheets.load_billing)
+    await _reply(update.effective_message, format_billing(rules))
 
 
 def _format_saved(txn: Transaction) -> str:
@@ -159,12 +200,9 @@ async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
 def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).updater(None).build()
     sheets = SheetsService(settings.google_sheet_id, settings.service_account_json)
-    gemini = GeminiService(settings.gemini_api_key, settings.gemini_models)
     application.bot_data.update(
         settings=settings,
         sheets=sheets,
-        gemini=gemini,
-        assistant=Assistant(gemini, sheets, settings, write=True),
         gmail=(GmailClient(settings.gmail_client_id, settings.gmail_client_secret,
                            settings.gmail_refresh_token) if settings.gmail_enabled else None),
         gmail_lock=asyncio.Lock(),
@@ -172,6 +210,10 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
     application.add_handler(CommandHandler("clear", clear_chat))
+    application.add_handler(CommandHandler("search", search_command))
+    application.add_handler(CommandHandler("total", total_command))
+    application.add_handler(CommandHandler("cards", cards_command))
+    application.add_handler(CommandHandler("billing", billing_command))
     application.add_handler(CommandHandler("dashboard", dashboard))
     application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -226,29 +268,6 @@ def create_app() -> FastAPI:
         await telegram_app.process_update(update)
         return {"ok": True}
 
-    @api.post(IOS_WEBHOOK_PATH)
-    async def ios_webhook(request: Request):
-        if not settings.ios_webhook_secret:
-            raise HTTPException(status_code=503, detail="iOS webhook not configured")
-        if not hmac.compare_digest(request.headers.get("X-Webhook-Secret", ""),
-                                   settings.ios_webhook_secret):
-            raise HTTPException(status_code=403, detail="Invalid webhook secret")
-        payload = await request.json()
-        text = str(payload.get("text", "")).strip()
-        sender = str(payload.get("user", "")).strip() or "iOS"
-        if not text:
-            raise HTTPException(status_code=422, detail="Missing 'text'")
-
-        now = datetime.now(settings.tz)
-        try:
-            txn = await asyncio.to_thread(
-                log_ios_expense, text, sender, telegram_app.bot_data["gemini"],
-                telegram_app.bot_data["sheets"], settings, now)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="No amount found in notification")
-        await _notify_allowed_users(telegram_app.bot, settings, f"💳 Apple Pay logged: {_format_saved(txn)}")
-        return {"ok": True, "saved": _format_saved(txn)}
-
     @api.post(GMAIL_WEBHOOK_PATH)
     async def gmail_webhook(request: Request):
         if not settings.gmail_push_token or not hmac.compare_digest(
@@ -263,7 +282,7 @@ def create_app() -> FastAPI:
         async with telegram_app.bot_data["gmail_lock"]:
             logged = await asyncio.to_thread(
                 sync_gmail, gmail, telegram_app.bot_data["sheets"],
-                settings, push_history_id, now, gemini=telegram_app.bot_data["gemini"])
+                settings, push_history_id, now)
         for txn in logged:
             await _notify_allowed_users(telegram_app.bot, settings,
                                         f"📧 Transaction logged: {_format_saved(txn)}")

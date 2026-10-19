@@ -1,13 +1,15 @@
 from datetime import date
-from types import SimpleNamespace
 
 import pytest
 
 from chart_generator import render_dashboard
-from gemini_service import GeminiService
+from queries import (QueryError, format_billing, format_search, format_totals, parse_month,
+                     parse_search)
 from sheets_service import (
+    BillingRule,
     Transaction,
     TransactionQuery,
+    card_names_by_ending,
     filter_transactions,
     parse_date,
     row_to_billing,
@@ -56,19 +58,6 @@ def test_filter_by_user_and_card_is_case_insensitive():
     assert len(filter_transactions(txns, query)) == 1
 
 
-def test_parse_expense_rejects_zero_amount():
-    service = GeminiService.__new__(GeminiService)
-    service._json = lambda prompt, schema: {"amount": 0, "category": "Food"}
-    with pytest.raises(ValueError):
-        service.parse_expense("lunch", "En Jie", date(2026, 10, 17))
-
-
-def test_parse_expense_returns_numeric_amount():
-    service = GeminiService.__new__(GeminiService)
-    service._json = lambda prompt, schema: {"amount": "15", "category": "Food"}
-    assert service.parse_expense("lunch $15", "En Jie", date(2026, 10, 17))["amount"] == 15.0
-
-
 def test_row_to_billing_rejects_invalid_days():
     assert row_to_billing({"Card": "Citi", "Statement Closing Day": 40, "Payment Due Day": 5}) is None
     assert parse_date("2026-10-05") == date(2026, 10, 5)
@@ -82,51 +71,58 @@ def test_render_dashboard_returns_png_and_none_when_empty():
     assert png.startswith(b"\x89PNG")
 
 
-def _client_error(code, status):
-    from google.genai import errors
-    return errors.ClientError(code, {"error": {"code": code, "status": status}})
+def test_parse_search_splits_range_filters_and_keyword():
+    query = parse_search(["grab", "2026-10-01..2026-10-31", 'card=UOB Card', "user=jeslin"])
+    assert query.start == date(2026, 10, 1)
+    assert query.end == date(2026, 10, 31)
+    assert query.merchant == "grab"
+    assert query.card == "UOB Card"
+    assert query.user == "jeslin"
 
 
-def test_json_falls_back_to_next_model_when_quota_exhausted():
-    service = GeminiService.__new__(GeminiService)
-    service._models = ("first", "second")
-    calls = []
-
-    def generate_content(model, **kwargs):
-        calls.append(model)
-        if model == "first":
-            raise _client_error(429, "RESOURCE_EXHAUSTED")
-        return SimpleNamespace(text='{"merchant": "doctorHEE"}')
-
-    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
-    assert service.parse_paynow_merchant("subject", "body") == "doctorHEE"
-    assert calls == ["first", "second"]
+def test_parse_search_rejects_bad_range_and_unknown_filter():
+    with pytest.raises(QueryError):
+        parse_search(["2026-10-31..2026-10-01"])
+    with pytest.raises(QueryError):
+        parse_search(["color=red"])
 
 
-def test_json_raises_non_quota_errors_without_fallback():
-    from google.genai import errors
-    service = GeminiService.__new__(GeminiService)
-    service._models = ("first", "second")
-    calls = []
-
-    def generate_content(model, **kwargs):
-        calls.append(model)
-        raise _client_error(400, "INVALID_ARGUMENT")
-
-    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
-    with pytest.raises(errors.ClientError):
-        service.parse_paynow_merchant("subject", "body")
-    assert calls == ["first"]
+def test_format_search_reports_count_total_and_latest_rows():
+    txns = [_txn(date(2026, 10, d), "Food", "DBS", 10.0, merchant="Koufu") for d in range(1, 4)]
+    text = format_search(txns, TransactionQuery(merchant="koufu"))
+    assert text.startswith("3 transaction(s), total 30.00")
+    assert "01 Oct 2026 | DBS | SGD 10.00 | Koufu" in text
+    assert format_search(txns, TransactionQuery(merchant="nothing")) == "No matching transactions."
 
 
-def test_json_falls_back_when_model_not_found():
-    service = GeminiService.__new__(GeminiService)
-    service._models = ("missing", "second")
+def test_parse_month_defaults_to_current_month_and_rejects_bad_input():
+    assert parse_month("", date(2026, 10, 17)) == date(2026, 10, 1)
+    assert parse_month("2026-09", date(2026, 10, 17)) == date(2026, 9, 1)
+    with pytest.raises(QueryError):
+        parse_month("October", date(2026, 10, 17))
 
-    def generate_content(model, **kwargs):
-        if model == "missing":
-            raise _client_error(404, "NOT_FOUND")
-        return SimpleNamespace(text='{"merchant": "doctorHEE"}')
 
-    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
-    assert service.parse_paynow_merchant("subject", "body") == "doctorHEE"
+def test_format_totals_groups_by_category_for_one_month_only():
+    txns = [_txn(date(2026, 10, 1), "Food", "DBS", 10.0),
+            _txn(date(2026, 10, 2), "Food", "DBS", 5.0),
+            _txn(date(2026, 10, 3), "Transport", "Citi", 4.0),
+            _txn(date(2026, 9, 30), "Food", "DBS", 99.0)]
+    text = format_totals(txns, date(2026, 10, 1))
+    assert "Food: 15.00" in text
+    assert "Transport: 4.00" in text
+    assert "Total: 19.00" in text
+    assert "99" not in text
+
+
+def test_format_billing_lists_each_rule():
+    rules = [BillingRule(cardholder="En Jie", card="DBS Altitude", closing_day=5, due_day=25)]
+    assert format_billing(rules) == "DBS Altitude (En Jie): statement closes day 5, due day 25"
+
+
+def test_card_names_by_ending_keys_on_last_4_digits_and_skips_incomplete_rows():
+    rows = [
+        {"Card": "UOB Lady's Card", "Card Number": "4539 1234 5678 2881"},
+        {"Card": "DBS Altitude", "Card Number": 1111},
+        {"Card": "No number yet", "Card Number": ""},
+    ]
+    assert card_names_by_ending(rows) == {"2881": "UOB Lady's Card", "1111": "DBS Altitude"}

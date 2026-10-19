@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 
 from google.oauth2.credentials import Credentials
@@ -22,6 +22,12 @@ RELEVANT_KEYWORDS = re.compile(
 )
 PAYNOW_OUTGOING = re.compile(
     r"You made a PayNow transfer of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+PAYNOW_RECIPIENT = re.compile(
+    r"You made a PayNow transfer of (?:SGD|S\$)\s?[\d,]+(?:\.\d+)? to (.+?)"
+    r"(?:\s*\(UEN[^)]*\))?\s+on your a/c", re.IGNORECASE)
+CARD_ALERT = re.compile(
+    r"A transaction of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) was made with your (.+?) ending (\d{4}) "
+    r"on (\d{2}/\d{2}/\d{2}) at (.+?)\.(?:\s|$)", re.IGNORECASE)
 MAX_BODY_CHARS = 4000
 
 
@@ -32,6 +38,15 @@ class EmailMessage:
     sender: str
     body: str
     sent_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CardAlert:
+    amount: float
+    card: str
+    ending: str
+    merchant: str
+    day: date
 
 
 def decode_push_history_id(push_body: dict) -> str:
@@ -48,6 +63,26 @@ def parse_paynow_amount(body: str) -> float | None:
     """Amount of an outgoing PayNow transfer, or None for any other email."""
     match = PAYNOW_OUTGOING.search(body)
     return float(match.group(1).replace(",", "")) if match else None
+
+
+def parse_paynow_recipient(body: str) -> str:
+    """Recipient name of an outgoing PayNow transfer, or "" if not found."""
+    match = PAYNOW_RECIPIENT.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def parse_card_alert(body: str) -> CardAlert | None:
+    """Card transaction from a UOB card alert, or None for any other email."""
+    match = CARD_ALERT.search(body)
+    if not match:
+        return None
+    return CardAlert(
+        amount=float(match.group(1).replace(",", "")),
+        card=f"{match.group(2).strip()} ending {match.group(3)}",
+        ending=match.group(3),
+        merchant=match.group(5).strip(),
+        day=datetime.strptime(match.group(4), "%d/%m/%y").date(),
+    )
 
 
 def _sent_at(headers: list[dict]) -> datetime | None:

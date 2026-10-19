@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
@@ -129,6 +130,17 @@ def filter_transactions(transactions: list[Transaction], query: TransactionQuery
     return sorted(matches, key=lambda t: (t.date, t.time))
 
 
+def card_names_by_ending(rows: list[dict]) -> dict[str, str]:
+    """Last 4 digits of 'Card Number' -> 'Card' name, from the Cards tab rows."""
+    mapping = {}
+    for row in rows:
+        digits = re.sub(r"\D", "", str(row.get("Card Number", "")))[-4:]
+        name = str(row.get("Card", "")).strip()
+        if len(digits) == 4 and name:
+            mapping[digits] = name
+    return mapping
+
+
 def cards_as_text(rows: list[dict]) -> str:
     lines = []
     for row in rows:
@@ -172,6 +184,9 @@ class SheetsService:
 
     def load_cards_text(self) -> str:
         return cards_as_text(self._tab(CARDS_TAB).get_all_records())
+
+    def load_card_names_by_ending(self) -> dict[str, str]:
+        return card_names_by_ending(self._tab(CARDS_TAB).get_all_records())
 
     def load_state(self, key: str) -> Optional[str]:
         for row in self._state_sheet().get_all_records():

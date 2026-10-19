@@ -9,8 +9,8 @@ from googleapiclient.errors import HttpError
 
 from config import Settings
 from gmail_service import (EmailMessage, decode_push_history_id, extract_body, is_relevant,
-                           parse_paynow_amount)
-from ingestion import GMAIL_HISTORY_KEY, log_ios_expense, sync_gmail
+                           parse_card_alert, parse_paynow_amount, parse_paynow_recipient)
+from ingestion import GMAIL_HISTORY_KEY, sync_gmail
 from sheets_service import Transaction
 
 NOW = datetime(2026, 10, 17, 21, 0)
@@ -19,8 +19,8 @@ NOW = datetime(2026, 10, 17, 21, 0)
 def make_settings(**overrides) -> Settings:
     base = dict(
         telegram_bot_token="t", webhook_url="https://x", webhook_secret="s",
-        allowed_user_ids=frozenset({1}), reminder_chat_id=None, gemini_api_key="k",
-        gemini_models=("m",), google_sheet_id="id", service_account_json="{}",
+        allowed_user_ids=frozenset({1}), reminder_chat_id=None,
+        google_sheet_id="id", service_account_json="{}",
         default_currency="SGD", timezone="Asia/Singapore", gmail_owner_name="En Jie",
     )
     base.update(overrides)
@@ -28,9 +28,10 @@ def make_settings(**overrides) -> Settings:
 
 
 class FakeSheets:
-    def __init__(self, transactions=None, state=None):
+    def __init__(self, transactions=None, state=None, card_names=None):
         self.transactions = list(transactions or [])
         self.state = dict(state or {})
+        self.card_names = dict(card_names or {})
 
     def append_transaction(self, txn):
         self.transactions.append(txn)
@@ -44,23 +45,9 @@ class FakeSheets:
     def save_state(self, key, value):
         self.state[key] = value
 
+    def load_card_names_by_ending(self):
+        return dict(self.card_names)
 
-class FakeGemini:
-    def __init__(self, expense=None, emails=None, paynow_merchant="Town Council"):
-        self.expense = expense
-        self.emails = emails or {}
-        self.email_calls = []
-        self.paynow_merchant = paynow_merchant
-
-    def parse_expense(self, text, sender, today):
-        if self.expense is None:
-            raise ValueError("no amount")
-        return self.expense
-
-    def parse_paynow_merchant(self, subject, body):
-        if self.paynow_merchant is None:
-            raise RuntimeError("gemini down")
-        return self.paynow_merchant
 
 class FakeGmail:
     def __init__(self, ids=(), latest="200", messages=None, history_error=None):
@@ -78,55 +65,46 @@ class FakeGmail:
         return self.messages.get(message_id)
 
 
-def email(message_id, subject, body="You made a PayNow transfer of SGD 42.50 to Town Council"):
+def email(message_id, subject,
+          body="You made a PayNow transfer of SGD 42.50 to Town Council on your a/c ending 3606"):
     return EmailMessage(id=message_id, subject=subject, sender="uob@uob.com.sg", body=body,
                         sent_at=datetime(2026, 10, 1, 2, 25, tzinfo=timezone.utc))
 
 
-def test_ios_expense_is_appended_with_defaults():
-    sheets = FakeSheets()
-    gemini = FakeGemini(expense={"date": "", "time": "", "category": "Groceries", "amount": 14.5,
-                                 "currency": "", "card": ""})
-    txn = log_ios_expense("DBS: SGD 14.50 charged at NTUC via Apple Pay", "En Jie",
-                          gemini, sheets, make_settings(), NOW)
-    assert sheets.transactions == [txn]
-    assert txn.user == "En Jie"
-    assert txn.amount == 14.5
-    assert txn.currency == "SGD"
-    assert txn.card == "Unknown"
-    assert txn.raw.startswith("ios:")
-    assert txn.raw.endswith("| DBS: SGD 14.50 charged at NTUC via Apple Pay")
-    assert txn.date == date(2026, 10, 17)
-
-
-def test_ios_expense_without_amount_appends_nothing():
-    sheets = FakeSheets()
-    with pytest.raises(ValueError):
-        log_ios_expense("Your OTP is 123456", "En Jie", FakeGemini(), sheets, make_settings(), NOW)
-    assert sheets.transactions == []
-
-
-def test_ios_duplicate_notification_is_skipped():
-    gemini = FakeGemini(expense={"amount": 14.5, "category": "Groceries", "merchant": "NTUC"})
-    sheets = FakeSheets()
-    first = log_ios_expense("DBS: SGD 14.50 at NTUC", "En Jie", gemini, sheets, make_settings(), NOW)
-    second = log_ios_expense("dbs:  SGD 14.50 at ntuc", "En Jie", gemini, sheets, make_settings(), NOW)
-    assert first is not None
-    assert second is None
-    assert len(sheets.transactions) == 1
-
-
-def test_ios_payload_card_overrides_gemini_card_and_unknown_category_maps_to_others():
-    gemini = FakeGemini(expense={"amount": 9, "category": "Food", "card": "Citi",
-                                 "merchant": "Koufu"})
-    txn = log_ios_expense("Citi: SGD 9 at Koufu", "En Jie", gemini, FakeSheets(),
-                          make_settings(), NOW, card="DBS Altitude")
-    assert txn.card == "DBS Altitude"
+def test_card_alert_is_logged_under_others_with_parsed_fields():
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    body = ("A transaction of SGD 1,047.60 was made with your UOB Card ending 2881 on 19/10/26 "
+            "at PHS HEARTBEAT@BEDOK #2. If unauthorised, call 24/7 Fraud Hotline now")
+    gmail = FakeGmail(ids=["m1"], latest="200", messages={"m1": email("m1", "UOB - Transaction Alert", body)})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert len(logged) == 1
+    txn = logged[0]
+    assert txn.amount == 1047.60
+    assert txn.card == "UOB Card ending 2881"
+    assert txn.merchant == "PHS HEARTBEAT@BEDOK #2"
+    assert txn.date == date(2026, 10, 19)
     assert txn.category == "Others"
-    assert txn.merchant == "Koufu"
+    assert txn.user == "En Jie"
 
 
-def test_gmail_first_push_only_stores_history_id():
+def test_card_alert_regex_rejects_other_emails():
+    assert parse_card_alert("Your OTP is 123456") is None
+
+
+def test_paynow_recipient_is_extracted_without_uen_suffix():
+    body = "You made a PayNow transfer of SGD 200.00 to YOU TECHNOLOGIES GRO (UEN ending CFAS) on your a/c ending 3606"
+    assert parse_paynow_recipient(body) == "YOU TECHNOLOGIES GRO"
+
+
+def test_paynow_without_recipient_falls_back_to_default_merchant():
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], messages={"m1": email(
+        "m1", "PayNow sent", body="You made a PayNow transfer of SGD 42.50")})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert logged[0].merchant == "NoMerchant/Paynow"
+
+
+
     sheets = FakeSheets()
     gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
     logged = sync_gmail(gmail, sheets, make_settings(), "100", NOW)
@@ -145,26 +123,13 @@ def test_gmail_logs_paynow_transfer_with_fixed_values_and_advances_history():
     assert txn.category == "PAYNOW"
     assert txn.currency == "SGD"
     assert txn.card == "No Card/Bank Transfer"
-    assert txn.merchant == "NoMerchant/Paynow"
+    assert txn.merchant == "Town Council"
     assert txn.user == "En Jie"
-    assert txn.raw == "gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council"
+    assert txn.raw == ("gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council "
+                       "on your a/c ending 3606")
     assert txn.date == date(2026, 10, 1)
     assert txn.time == "10:25"
     assert sheets.state[GMAIL_HISTORY_KEY] == "200"
-
-
-def test_gmail_paynow_merchant_comes_from_gemini_and_falls_back_on_error():
-    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
-    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
-    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW, gemini=FakeGemini())
-    assert logged[0].merchant == "Town Council"
-
-    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
-    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
-    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW,
-                        gemini=FakeGemini(paynow_merchant=None))
-    assert len(logged) == 1
-    assert logged[0].merchant == "NoMerchant/Paynow"
 
 
 def test_gmail_skips_email_without_paynow_amount():
@@ -179,7 +144,7 @@ def test_gmail_does_not_log_same_message_twice():
     existing = Transaction(date=date(2026, 10, 1), time="09:00", user="En Jie",
                            category="PAYNOW", amount=42.5, currency="SGD",
                            card="No Card/Bank Transfer", merchant="NoMerchant/Paynow",
-                           raw="gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council")
+                           raw="gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council on your a/c ending 3606")
     sheets = FakeSheets(transactions=[existing], state={GMAIL_HISTORY_KEY: "100"})
     gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
     assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
@@ -257,6 +222,30 @@ def test_uob_paynow_outbound_template_is_parsed_and_logged():
     assert len(logged) == 1
     assert logged[0].amount == 200.0
     assert logged[0].category == "PAYNOW"
+    assert logged[0].merchant == "YOU TECHNOLOGIES GRO"
+
+
+def test_uob_card_alert_template_is_logged():
+    template = load_reference("Creditcard_payment.json")
+    assert is_relevant(template["subject"], template["raw_content"])
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"], template["raw_content"])})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert len(logged) == 1
+    assert logged[0].amount == 47.6
+    assert logged[0].card == "UOB Card ending 2881"
+    assert logged[0].merchant == "PHS HEARTBEAT@BEDOK #2"
+
+
+def test_card_alert_uses_cards_tab_name_matched_by_last_4_digits():
+    template = load_reference("Creditcard_payment.json")
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"},
+                        card_names={"2881": "UOB Lady's Card"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"], template["raw_content"])})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert logged[0].card == "UOB Lady's Card"
 
 
 def test_uob_paynow_inbound_template_is_not_logged():

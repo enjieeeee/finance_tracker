@@ -1,12 +1,14 @@
 # Couple Finance Agent
 
-A Telegram bot for a couple. It logs expenses to a shared Google Sheet, parses free text with Gemini, answers history questions, recommends credit cards, sends billing reminders, and draws monthly spending charts.
+A Telegram bot for a couple. It records expenses from Gmail alerts into a shared Google Sheet, answers history queries with slash commands, recommends credit cards, sends billing reminders, and draws monthly spending charts. It makes no paid LLM API calls.
 
 ## Features
-- **Log expenses**: "Lunch at hawker center $15, DBS card, En Jie" is parsed and appended to the `Transactions` tab.
-- **Chat assistant**: free-form conversation. Gemini decides what to do by calling tools: `search_transactions` (reads the sheet), `log_expense` plus `confirm_expense` (an expense is shown for confirmation before it is saved), `get_cards` (card rules), and `get_billing`. Replies stream in live, with the thinking shown first. Each chat keeps its recent history (20 turns); `/clear` resets it.
+- **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged.
+- **Query commands**: `/search`, `/total`, `/cards`, `/billing` read the sheet directly.
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus `/reminders`.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
+
+Free-text messages get a short help reply. Use the commands below.
 
 ## 1. Google Sheet
 Create a spreadsheet with three tabs and these headers in row 1:
@@ -14,22 +16,15 @@ Create a spreadsheet with three tabs and these headers in row 1:
 | Tab | Headers |
 |---|---|
 | `Transactions` | `Date, Time, User, Category, Amount, Currency, Card, Merchant, Raw Message, Logged At` |
-| `Cards` | `Card Holder, Card, Issuer, Reward Type, Category Rules, Min Spend, Key Exceptions & Traps to Avoid` |
+| `Cards` | `Card Holder, Card, Card Number, Issuer, Reward Type, Category Rules, Min Spend, Key Exceptions & Traps to Avoid` |
 | `Billing` | `Cardholder, Card, Statement Closing Day, Payment Due Day, Notes` |
 
-Example `Cards` row: `En Jie | DBS Altitude | DBS | miles | dining 3mpd; online 3mpd; other 1.2mpd | - | SIA partner`.
+Example `Cards` row: `En Jie | UOB Lady's Card | 2881 | UOB | ...`. `Card Number` should hold the last 4 digits only; a Gmail card alert ending in `2881` is then logged with the `Card` name (`UOB Lady's Card`) instead of `UOB Card ending 2881`. If no row matches, the alert keeps the `ending 2881` label.
 `Billing` uses plain day numbers (e.g. closing `5`, due `25`).
 
 Copy the sheet ID from its URL: `docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.
 
 **Migrating an existing sheet:** rename the old `Merchant/Notes` header to `Merchant` and delete any `Notes` column in the Transactions tab, so the header matches the table above. Categories must be one of `Groceries, Dining, Transport, Shopping, Bills, Others`; older rows are left as-is.
-
-## iOS Shortcut payload
-`POST /webhook/ios` with header `X-Webhook-Secret` and JSON body:
-```json
-{"text": "DBS: SGD 14.50 charged at NTUC via Apple Pay", "user": "En Jie", "card": "DBS Altitude"}
-```
-`card` is optional; if omitted, the card is parsed from `text`. Identical notifications on the same day are logged once and return `{"ok": true, "duplicate": true}`.
 
 ## 2. Google service account
 1. In Google Cloud Console, create a project and enable the **Google Sheets API**.
@@ -37,10 +32,9 @@ Copy the sheet ID from its URL: `docs.google.com/spreadsheets/d/<SHEET_ID>/edit`
 3. Save the key as `service_account.json` in the project folder (git-ignored).
 4. Share the spreadsheet with the service account's email (`...@...iam.gserviceaccount.com`) as **Editor**.
 
-## 3. Telegram bot and Gemini key
+## 3. Telegram bot
 - Message `@BotFather`, send `/newbot`, and copy the token.
 - Get each person's numeric user ID (e.g. from `@userinfobot`) for `ALLOWED_USER_IDS`.
-- Create a Gemini API key in Google AI Studio.
 
 ## 4. Environment variables
 Copy `.env.example` to `.env` and fill it in. Never commit `.env`.
@@ -52,8 +46,6 @@ Copy `.env.example` to `.env` and fill it in. Never commit `.env`.
 | `WEBHOOK_URL` | Public HTTPS URL of the service (set after the first deploy) |
 | `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs allowed to use the bot |
 | `REMINDER_CHAT_ID` | Chat that receives scheduled reminders |
-| `GEMINI_API_KEY` | Gemini key |
-| `GEMINI_MODELS` | Comma-separated priority list. When a model returns 429 (daily quota used up) or 404 (not available to your key), the next one is tried. Defaults to the free-tier list: `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-flash-lite`. Verify the IDs are available to your key |
 | `GOOGLE_SHEET_ID` | Spreadsheet ID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to the key file, or the JSON inline |
 | `DEFAULT_CURRENCY` | Default `SGD` |
@@ -70,20 +62,12 @@ uvicorn main:app --port 8080
 
 Run tests with `pytest`.
 
-### Debug the AI locally (no Telegram needed)
-```bash
-python dev_console.py          # dry run: shows thinking, tool calls, and the answer; writes nothing
-python dev_console.py --write  # also appends expenses to the real sheet
-python dev_console.py --debug  # also prints full Gemini prompts and raw JSON responses
-```
-Type `billing` to see the reminder summary, `clear` to reset the conversation, `quit` to exit. Use this to tune the system prompt and tools before deploying.
-
 ## 6. Deploy to Cloud Run
 Option A: pass the variables inline.
 ```bash
 gcloud run deploy finance-agent --source . --region asia-southeast1 \
   --allow-unauthenticated --min-instances 1 \
-  --set-env-vars "TELEGRAM_BOT_TOKEN=...,TELEGRAM_WEBHOOK_SECRET=...,WEBHOOK_URL=https://<service-url>,ALLOWED_USER_IDS=...,REMINDER_CHAT_ID=...,GEMINI_API_KEY=...,GOOGLE_SHEET_ID=...,GOOGLE_SERVICE_ACCOUNT_JSON=<paste JSON>,IOS_WEBHOOK_SECRET=..."
+  --set-env-vars "TELEGRAM_BOT_TOKEN=...,TELEGRAM_WEBHOOK_SECRET=...,WEBHOOK_URL=https://<service-url>,ALLOWED_USER_IDS=...,REMINDER_CHAT_ID=...,GOOGLE_SHEET_ID=...,GOOGLE_SERVICE_ACCOUNT_JSON=<paste JSON>"
 ```
 
 Option B: keep the variables in `env.yaml` and deploy with `--env-vars-file`. Create the file in the project root with one `KEY: "value"` per line (quote every value, so tokens and JSON parse correctly), then run:
@@ -96,13 +80,17 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 \
 - Option B keeps secrets out of your shell history.
 - To change one variable without redeploying, use `gcloud run services update finance-agent --region asia-southeast1 --update-env-vars KEY=value`.
 
-- Use `--set-secrets` with Secret Manager for the token and API keys in production.
+- Use `--set-secrets` with Secret Manager for the token and keys in production.
 - `--min-instances 1` keeps the built-in reminder scheduler running. It is not free-tier, so review the cost.
 - After the first deploy, set `WEBHOOK_URL` to the service URL and redeploy. The bot registers its webhook on startup.
-- To see the AI responses in production, tail the logs: `gcloud run services logs tail finance-agent --region asia-southeast1`. Set `LOG_LEVEL=DEBUG` on the service to include full Gemini prompts. Note that prompts contain your expense text, so turn it off when you're done.
+- To check logs: `gcloud run services logs tail finance-agent --region asia-southeast1`.
 
 ## Commands
 - `/start` or `/help`: show usage
-- `/clear`: forget this chat's conversation history
-- `/dashboard [YYYY-MM]`: monthly spending charts
-- `/reminders`: billing cycle summary for all cards
+- `/search <keyword> [YYYY-MM-DD..YYYY-MM-DD] [card=<name>] [user=<name>] [category=<name>]`: total, count, and the last 10 matching transactions. Keywords match the merchant name. Quote multi-word values, e.g. `/search "heart beat" card="UOB Card"`.
+- `/total [YYYY-MM]`: totals per category for a month (defaults to the current month).
+- `/cards`: card rules from the `Cards` tab.
+- `/billing`: billing cycle summary from the `Billing` tab.
+- `/dashboard [YYYY-MM]`: monthly spending charts.
+- `/reminders`: billing cycle summary for all cards.
+- `/clear`: no-op, kept for compatibility (the bot keeps no chat history).

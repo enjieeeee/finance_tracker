@@ -3,7 +3,6 @@ fastapi>=0.110
 uvicorn>=0.29
 gspread>=6.0
 google-auth>=2.29
-google-genai>=1.0
 google-api-python-client>=2.120
 google-auth-oauthlib>=1.2
 pandas>=2.2
