@@ -33,6 +33,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 WEBHOOK_PATH = "/telegram/webhook"
+TELEGRAM_MAX_CHARS = 4096
 IOS_WEBHOOK_PATH = "/webhook/ios"
 GMAIL_WEBHOOK_PATH = "/webhook/gmail"
 HELP_TEXT = (
@@ -91,9 +92,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                                datetime.now(settings.tz))
     try:
         await stream_reply(placeholder, chunks, status="🧠 Thinking…")
-    except Exception:
+    except Exception as exc:
         logger.exception("Assistant failed")
-        await placeholder.edit_text("Sorry, I couldn't process that. Please try again.")
+        detail = f"[error] {type(exc).__name__}: {exc}"[:TELEGRAM_MAX_CHARS]
+        await placeholder.edit_text(f"Sorry, I couldn't process that. Please try again.\n{detail}")
 
 
 def _format_saved(txn: Transaction) -> str:
