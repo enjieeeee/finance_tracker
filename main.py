@@ -268,7 +268,7 @@ def create_app() -> FastAPI:
         now = datetime.now(settings.tz)
         async with telegram_app.bot_data["gmail_lock"]:
             logged = await asyncio.to_thread(
-                sync_gmail, gmail, telegram_app.bot_data["sheets"], telegram_app.bot_data["gemini"],
+                sync_gmail, gmail, telegram_app.bot_data["sheets"],
                 settings, push_history_id, now)
         for txn in logged:
             await _notify_allowed_users(telegram_app.bot, settings,

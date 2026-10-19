@@ -3,6 +3,8 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -18,6 +20,8 @@ RELEVANT_KEYWORDS = re.compile(
     r"order|purchase|statement|grab|shopee|lazada|fairprice|ntuc|amount|\$",
     re.IGNORECASE,
 )
+PAYNOW_OUTGOING = re.compile(
+    r"You made a PayNow transfer of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 MAX_BODY_CHARS = 4000
 
 
@@ -27,6 +31,7 @@ class EmailMessage:
     subject: str
     sender: str
     body: str
+    sent_at: datetime | None = None
 
 
 def decode_push_history_id(push_body: dict) -> str:
@@ -37,6 +42,19 @@ def decode_push_history_id(push_body: dict) -> str:
 
 def is_relevant(subject: str, body: str) -> bool:
     return bool(RELEVANT_KEYWORDS.search(f"{subject} {body[:1500]}"))
+
+
+def parse_paynow_amount(body: str) -> float | None:
+    """Amount of an outgoing PayNow transfer, or None for any other email."""
+    match = PAYNOW_OUTGOING.search(body)
+    return float(match.group(1).replace(",", "")) if match else None
+
+
+def _sent_at(headers: list[dict]) -> datetime | None:
+    try:
+        return parsedate_to_datetime(_header(headers, "Date"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _b64url_decode(data: str) -> str:
@@ -121,4 +139,5 @@ class GmailClient:
             subject=_header(headers, "Subject"),
             sender=_header(headers, "From"),
             body=extract_body(payload) or message.get("snippet", ""),
+            sent_at=_sent_at(headers),
         )

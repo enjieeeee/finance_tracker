@@ -7,7 +7,7 @@ from googleapiclient.errors import HttpError
 
 from config import Settings
 from gemini_service import CATEGORIES, GeminiService
-from gmail_service import GmailClient, is_relevant
+from gmail_service import EmailMessage, GmailClient, is_relevant, parse_paynow_amount
 from sheets_service import SheetsService, Transaction, parse_date
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 GMAIL_HISTORY_KEY = "gmail_history_id"
 IOS_KEY_PREFIX = "ios:"
 FALLBACK_CATEGORY = "Others"
+PAYNOW_CATEGORY = "PAYNOW"
+PAYNOW_CURRENCY = "SGD"
+PAYNOW_CARD = "No Card/Bank Transfer"
+PAYNOW_MERCHANT = "NoMerchant/Paynow"
 
 
 def ios_dedupe_key(text: str, sender: str, day: str) -> str:
@@ -71,9 +75,27 @@ def is_gmail_rate_limited(exc: HttpError) -> bool:
     return exc.resp.status == 403 and b"rateLimitExceeded" in (exc.content or b"")
 
 
-def sync_gmail(gmail: GmailClient, sheets: SheetsService, gemini: GeminiService,
+def build_paynow_transaction(email: EmailMessage, amount: float, settings: Settings,
+                             now: datetime) -> Transaction:
+    when = email.sent_at.astimezone(settings.tz) if email.sent_at else now
+    return Transaction(
+        date=when.date(),
+        time=when.strftime("%H:%M"),
+        user=settings.gmail_owner_name,
+        category=PAYNOW_CATEGORY,
+        amount=amount,
+        currency=PAYNOW_CURRENCY,
+        card=PAYNOW_CARD,
+        merchant=PAYNOW_MERCHANT,
+        notes="",
+        raw=f"gmail:{email.id} | {email.subject}",
+        logged_at=now.isoformat(timespec="seconds"),
+    )
+
+
+def sync_gmail(gmail: GmailClient, sheets: SheetsService,
                settings: Settings, push_history_id: str, now: datetime) -> list[Transaction]:
-    """Log outgoing-money emails since the last stored historyId. Safe to retry."""
+    """Log outgoing PayNow transfers since the last stored historyId. Safe to retry."""
     start = sheets.load_state(GMAIL_HISTORY_KEY)
     if not start:
         sheets.save_state(GMAIL_HISTORY_KEY, push_history_id)
@@ -102,11 +124,11 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService, gemini: GeminiService,
         email = gmail.get_email(message_id)
         if email is None or not is_relevant(email.subject, email.body):
             continue
-        fields = gemini.parse_email(email.subject, email.sender, email.body, now.date())
-        if fields.get("direction") != "outgoing" or float(fields.get("amount") or 0) <= 0:
+        amount = parse_paynow_amount(email.body)
+        if amount is None:
+            logger.info("Gmail message %s is not an outgoing PayNow transfer; skipping", message_id)
             continue
-        txn = build_transaction(fields, settings.gmail_owner_name, f"{tag} | {email.subject}",
-                                settings, now)
+        txn = build_paynow_transaction(email, amount, settings, now)
         sheets.append_transaction(txn)
         logged_raw.append(txn.raw)
         logged.append(txn)

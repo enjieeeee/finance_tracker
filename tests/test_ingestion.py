@@ -1,6 +1,6 @@
 import base64
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +8,8 @@ import pytest
 from googleapiclient.errors import HttpError
 
 from config import Settings
-from gmail_service import EmailMessage, decode_push_history_id, extract_body, is_relevant
+from gmail_service import (EmailMessage, decode_push_history_id, extract_body, is_relevant,
+                           parse_paynow_amount)
 from ingestion import GMAIL_HISTORY_KEY, log_ios_expense, sync_gmail
 from sheets_service import Transaction
 
@@ -55,11 +56,6 @@ class FakeGemini:
             raise ValueError("no amount")
         return self.expense
 
-    def parse_email(self, subject, sender, body, today):
-        self.email_calls.append(subject)
-        return self.emails[subject]
-
-
 class FakeGmail:
     def __init__(self, ids=(), latest="200", messages=None, history_error=None):
         self.ids = list(ids)
@@ -76,12 +72,9 @@ class FakeGmail:
         return self.messages.get(message_id)
 
 
-def email(message_id, subject, body="Payment details"):
-    return EmailMessage(id=message_id, subject=subject, sender="dbs@dbs.com", body=body)
-
-
-OUTGOING = {"direction": "outgoing", "date": "", "time": "", "category": "Bills",
-            "amount": 42.5, "currency": "SGD", "card": "PayNow DBS", "notes": "Town Council"}
+def email(message_id, subject, body="You made a PayNow transfer of SGD 42.50 to Town Council"):
+    return EmailMessage(id=message_id, subject=subject, sender="uob@uob.com.sg", body=body,
+                        sent_at=datetime(2026, 10, 1, 2, 25, tzinfo=timezone.utc))
 
 
 def test_ios_expense_is_appended_with_defaults():
@@ -130,53 +123,55 @@ def test_ios_payload_card_overrides_gemini_card_and_unknown_category_maps_to_oth
 def test_gmail_first_push_only_stores_history_id():
     sheets = FakeSheets()
     gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
-    logged = sync_gmail(gmail, sheets, FakeGemini(), make_settings(), "100", NOW)
+    logged = sync_gmail(gmail, sheets, make_settings(), "100", NOW)
     assert logged == []
     assert sheets.state[GMAIL_HISTORY_KEY] == "100"
 
 
-def test_gmail_logs_outgoing_email_and_advances_history():
+def test_gmail_logs_paynow_transfer_with_fixed_values_and_advances_history():
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
-    gmail = FakeGmail(ids=["m1"], latest="200", messages={"m1": email("m1", "Bill paid")})
-    gemini = FakeGemini(emails={"Bill paid": OUTGOING})
-    logged = sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW)
+    gmail = FakeGmail(ids=["m1"], latest="200", messages={"m1": email("m1", "PayNow sent")})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
 
     assert len(logged) == 1
-    assert logged[0].user == "En Jie"
-    assert logged[0].card == "PayNow DBS"
-    assert logged[0].raw == "gmail:m1 | Bill paid"
+    txn = logged[0]
+    assert txn.amount == 42.5
+    assert txn.category == "PAYNOW"
+    assert txn.currency == "SGD"
+    assert txn.card == "No Card/Bank Transfer"
+    assert txn.merchant == "NoMerchant/Paynow"
+    assert txn.user == "En Jie"
+    assert txn.notes == ""
+    assert txn.raw == "gmail:m1 | PayNow sent"
+    assert txn.date == date(2026, 10, 1)
+    assert txn.time == "10:25"
     assert sheets.state[GMAIL_HISTORY_KEY] == "200"
 
 
-def test_gmail_skips_incoming_and_none_directions():
+def test_gmail_skips_email_without_paynow_amount():
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
-    gmail = FakeGmail(ids=["m1", "m2"], messages={
-        "m1": email("m1", "Salary credited"), "m2": email("m2", "Promo")})
-    gemini = FakeGemini(emails={
-        "Salary credited": {**OUTGOING, "direction": "incoming"},
-        "Promo": {**OUTGOING, "direction": "none"},
-    })
-    assert sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW) == []
+    gmail = FakeGmail(ids=["m1"], messages={"m1": email(
+        "m1", "PayNow received", body="You have received SGD 118.29 from a friend")})
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
     assert sheets.transactions == []
 
 
 def test_gmail_does_not_log_same_message_twice():
-    existing = Transaction(date=date(2026, 10, 1), time="09:00", user="En Jie", category="Bills",
-                           amount=42.5, currency="SGD", card="PayNow DBS", notes="x",
-                           raw="gmail:m1 | Bill paid")
+    existing = Transaction(date=date(2026, 10, 1), time="09:00", user="En Jie",
+                           category="PAYNOW", amount=42.5, currency="SGD",
+                           card="No Card/Bank Transfer", merchant="NoMerchant/Paynow",
+                           notes="", raw="gmail:m1 | PayNow sent")
     sheets = FakeSheets(transactions=[existing], state={GMAIL_HISTORY_KEY: "100"})
-    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "Bill paid")})
-    gemini = FakeGemini(emails={"Bill paid": OUTGOING})
-    assert sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW) == []
-    assert gemini.email_calls == []
+    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
+    assert len(sheets.transactions) == 1
 
 
-def test_gmail_skips_irrelevant_email_without_calling_gemini():
+def test_gmail_skips_irrelevant_email():
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
     gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "Hello friend", body="Lunch?")})
-    gemini = FakeGemini()
-    assert sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW) == []
-    assert gemini.email_calls == []
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
+    assert sheets.transactions == []
 
 
 def test_gmail_rate_limit_skips_without_advancing_history():
@@ -184,7 +179,7 @@ def test_gmail_rate_limit_skips_without_advancing_history():
                       b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "1"})
     gmail = FakeGmail(history_error=quota)
-    assert sync_gmail(gmail, sheets, FakeGemini(), make_settings(), "500", NOW) == []
+    assert sync_gmail(gmail, sheets, make_settings(), "500", NOW) == []
     assert sheets.state[GMAIL_HISTORY_KEY] == "1"
 
 
@@ -192,7 +187,7 @@ def test_gmail_resets_when_stored_history_is_expired():
     not_found = HttpError(SimpleNamespace(status=404, reason="Not Found"), b"gone")
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "1"})
     gmail = FakeGmail(history_error=not_found)
-    assert sync_gmail(gmail, sheets, FakeGemini(), make_settings(), "500", NOW) == []
+    assert sync_gmail(gmail, sheets, make_settings(), "500", NOW) == []
     assert sheets.state[GMAIL_HISTORY_KEY] == "500"
 
 
@@ -232,28 +227,25 @@ def load_reference(name):
     return json.loads((REFERENCE / name).read_text())
 
 
-def test_uob_paynow_outbound_template_is_relevant_and_logged():
+def test_uob_paynow_outbound_template_is_parsed_and_logged():
     template = load_reference("Paynow_outboundtransfer.json")
     assert is_relevant(template["subject"], template["raw_content"])
+    assert parse_paynow_amount(template["raw_content"]) == 200.0
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
     gmail = FakeGmail(ids=["m1"], latest="200",
                       messages={"m1": email("m1", template["subject"], template["raw_content"])})
-    gemini = FakeGemini(emails={template["subject"]: {
-        **OUTGOING, "amount": 200.0, "merchant": "YOU TECHNOLOGIES GRO", "card": "UOB 3606",
-        "date": "2026-10-01", "time": "10:25", "category": "Others"}})
-    logged = sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW)
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
     assert len(logged) == 1
     assert logged[0].amount == 200.0
-    assert logged[0].merchant == "YOU TECHNOLOGIES GRO"
+    assert logged[0].category == "PAYNOW"
 
 
 def test_uob_paynow_inbound_template_is_not_logged():
     template = load_reference("Paynow_Inboundtransfer.json")
     assert is_relevant(template["subject"], template["raw_content"])
+    assert parse_paynow_amount(template["raw_content"]) is None
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
     gmail = FakeGmail(ids=["m1"], latest="200",
                       messages={"m1": email("m1", template["subject"], template["raw_content"])})
-    gemini = FakeGemini(emails={template["subject"]: {
-        **OUTGOING, "direction": "incoming", "amount": 118.29}})
-    assert sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW) == []
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
     assert sheets.transactions == []
