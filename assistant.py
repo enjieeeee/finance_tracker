@@ -29,7 +29,7 @@ def _string_arg(args: dict, key: str) -> str:
 
 def format_row(t: Transaction) -> str:
     return (f"{t.date.isoformat()} {t.time} | user={t.user} | category={t.category} | "
-            f"amount={t.amount:.2f} {t.currency} | card={t.card} | merchant={t.merchant} | notes={t.notes}")
+            f"amount={t.amount:.2f} {t.currency} | card={t.card} | merchant={t.merchant}")
 
 
 _SEARCH_PARAMS = {
@@ -54,9 +54,8 @@ _LOG_PARAMS = {
         "currency": {"type": "STRING", "description": "ISO code, or empty for the default"},
         "card": {"type": "STRING", "description": "Card or payment method, or empty"},
         "merchant": {"type": "STRING", "description": "Merchant or payee name, or empty"},
-        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
-    "required": ["category", "amount", "notes"],
+    "required": ["category", "amount"],
 }
 
 TOOLS = [types.Tool(function_declarations=[

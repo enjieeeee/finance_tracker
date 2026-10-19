@@ -1,3 +1,4 @@
+
 import asyncio
 import functools
 import hmac
@@ -98,7 +99,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 def _format_saved(txn: Transaction) -> str:
     return (f"{txn.date:%d %b %Y} {txn.time} | {txn.category} | "
-            f"{txn.currency} {txn.amount:,.2f} | {txn.card} | {txn.notes}")
+            f"{txn.currency} {txn.amount:,.2f} | {txn.card}")
 
 
 async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
@@ -186,19 +187,15 @@ def build_application(settings: Settings) -> Application:
     return application
 
 
-async def start_gmail_watch(settings: Settings, gmail: GmailClient | None) -> None:
-    """Register (or renew) the Gmail push watch. Gmail watches expire after 7 days."""
-    if gmail is None or not settings.gmail_pubsub_topic:
-        return
-    try:
-        await asyncio.to_thread(gmail.watch, settings.gmail_pubsub_topic)
-        logger.info("Gmail watch registered")
-    except Exception:
-        logger.exception("Could not register Gmail watch")
-
-
 async def renew_gmail_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await start_gmail_watch(context.bot_data["settings"], context.bot_data["gmail"])
+    """Gmail watches expire after 7 days, so renew daily."""
+    settings: Settings = context.bot_data["settings"]
+    gmail: GmailClient | None = context.bot_data["gmail"]
+    if gmail is None:
+        return
+    if settings.gmail_pubsub_topic:
+        await asyncio.to_thread(gmail.watch, settings.gmail_pubsub_topic)
+        logger.info("Renewed Gmail watch")
 
 
 def create_app() -> FastAPI:
@@ -214,7 +211,6 @@ def create_app() -> FastAPI:
             secret_token=settings.webhook_secret,
             allowed_updates=Update.ALL_TYPES,
         )
-        await start_gmail_watch(settings, telegram_app.bot_data["gmail"])
         yield
         await telegram_app.stop()
         await telegram_app.shutdown()
@@ -242,16 +238,13 @@ def create_app() -> FastAPI:
         if not text:
             raise HTTPException(status_code=422, detail="Missing 'text'")
 
-        card = str(payload.get("card", "")).strip() or None
         now = datetime.now(settings.tz)
         try:
             txn = await asyncio.to_thread(
                 log_ios_expense, text, sender, telegram_app.bot_data["gemini"],
-                telegram_app.bot_data["sheets"], settings, now, card=card)
+                telegram_app.bot_data["sheets"], settings, now)
         except ValueError:
             raise HTTPException(status_code=422, detail="No amount found in notification")
-        if txn is None:
-            return {"ok": True, "duplicate": True}
         await _notify_allowed_users(telegram_app.bot, settings, f"💳 Apple Pay logged: {_format_saved(txn)}")
         return {"ok": True, "saved": _format_saved(txn)}
 
@@ -268,11 +261,11 @@ def create_app() -> FastAPI:
         now = datetime.now(settings.tz)
         async with telegram_app.bot_data["gmail_lock"]:
             logged = await asyncio.to_thread(
-                sync_gmail, gmail, telegram_app.bot_data["sheets"],
+                sync_gmail, gmail, telegram_app.bot_data["sheets"], telegram_app.bot_data["gemini"],
                 settings, push_history_id, now)
         for txn in logged:
             await _notify_allowed_users(telegram_app.bot, settings,
-                                        f"📧 Email logged: {_format_saved(txn)}")
+                                        f"📧 Transaction logged: {_format_saved(txn)}")
         return {"ok": True, "logged": len(logged)}
 
     @api.get("/health")

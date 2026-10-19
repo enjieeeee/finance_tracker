@@ -24,9 +24,8 @@ EXPENSE_SCHEMA = {
         "currency": {"type": "STRING", "description": "ISO code, or empty if not stated"},
         "card": {"type": "STRING", "description": "Bank plus card name, or empty"},
         "merchant": {"type": "STRING", "description": "Merchant name, or empty"},
-        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
-    "required": ["date", "time", "category", "amount", "currency", "card", "merchant", "notes"],
+    "required": ["date", "time", "category", "amount", "currency", "card", "merchant"],
 }
 
 EMAIL_SCHEMA = {
@@ -40,10 +39,9 @@ EMAIL_SCHEMA = {
         "currency": {"type": "STRING", "description": "ISO code, or empty if not stated"},
         "card": {"type": "STRING", "description": "Payment method, or empty"},
         "merchant": {"type": "STRING", "description": "Merchant or recipient name"},
-        "notes": {"type": "STRING", "description": "Short description, or empty"},
     },
     "required": ["direction", "date", "time", "category", "amount", "currency", "card",
-                 "merchant", "notes"],
+                 "merchant"],
 }
 
 CATEGORY_RULE = ("- category is exactly one of: Groceries, Dining, Transport, Shopping, Bills, "

@@ -47,7 +47,7 @@ def _run(gemini, sheets, write):
 def test_log_expense_waits_for_confirmation_before_writing():
     sheets = FakeSheets()
     gemini = ScriptedGemini([
-        ("log_expense", {"category": "Food", "amount": 12, "notes": "lunch"}),
+        ("log_expense", {"category": "Food", "amount": 12}),
         "Prepared lunch $12. Confirm?",
     ])
 
@@ -60,7 +60,7 @@ def test_log_expense_waits_for_confirmation_before_writing():
 def test_confirm_expense_true_writes_the_prepared_row():
     sheets = FakeSheets()
     gemini = ScriptedGemini([
-        ("log_expense", {"category": "Food", "amount": 12, "notes": "lunch"}),
+        ("log_expense", {"category": "Food", "amount": 12}),
         ("confirm_expense", {"confirm": True}),
         "Saved.",
     ])
@@ -74,7 +74,7 @@ def test_confirm_expense_true_writes_the_prepared_row():
 def test_confirm_expense_false_discards_without_writing():
     sheets = FakeSheets()
     gemini = ScriptedGemini([
-        ("log_expense", {"category": "Food", "amount": 12, "notes": "lunch"}),
+        ("log_expense", {"category": "Food", "amount": 12}),
         ("confirm_expense", {"confirm": False}),
         "Discarded.",
     ])

@@ -14,9 +14,9 @@ from sheets_service import (
 )
 
 
-def _txn(day, category, card, notes, amount, user="En Jie"):
+def _txn(day, category, card, amount, user="En Jie", merchant=""):
     return Transaction(date=day, time="12:00", user=user, category=category, amount=amount,
-                       currency="SGD", card=card, notes=notes)
+                       currency="SGD", card=card, merchant=merchant)
 
 
 def test_row_to_transaction_accepts_formatted_amount_and_dd_mm_yyyy_dates():
@@ -27,12 +27,11 @@ def test_row_to_transaction_accepts_formatted_amount_and_dd_mm_yyyy_dates():
     assert t.amount == 1234.50
 
 
-def test_row_to_transaction_maps_merchant_separately_from_notes():
+def test_row_to_transaction_maps_merchant():
     row = {"Date": "05/10/2026", "Time": "12:30", "User": "Jeslin", "Category": "Dining",
-           "Amount": "12", "Currency": "SGD", "Card": "DBS", "Merchant": "Koufu", "Notes": "lunch"}
+           "Amount": "12", "Currency": "SGD", "Card": "DBS", "Merchant": "Koufu"}
     t = row_to_transaction(row)
     assert t.merchant == "Koufu"
-    assert t.notes == "lunch"
 
 
 def test_row_to_transaction_skips_rows_without_amount():
@@ -41,17 +40,17 @@ def test_row_to_transaction_skips_rows_without_amount():
 
 def test_filter_by_date_range_and_merchant_keyword():
     txns = [
-        _txn(date(2026, 10, 1), "Transport", "Citi", "Grab ride", 12.0),
-        _txn(date(2026, 10, 9), "Transport", "Citi", "Grab food", 20.0),
-        _txn(date(2026, 10, 9), "Food", "DBS", "Hawker", 5.0),
+        _txn(date(2026, 10, 1), "Transport", "Citi", 12.0),
+        _txn(date(2026, 10, 9), "Transport", "Citi", 20.0, merchant="Grab"),
+        _txn(date(2026, 10, 9), "Food", "DBS", 5.0, merchant="Koufu"),
     ]
     query = TransactionQuery(start=date(2026, 10, 5), end=date(2026, 10, 11), merchant="grab")
     assert [t.amount for t in filter_transactions(txns, query)] == [20.0]
 
 
 def test_filter_by_user_and_card_is_case_insensitive():
-    txns = [_txn(date(2026, 10, 1), "Food", "DBS Altitude", "x", 9, user="Jeslin"),
-            _txn(date(2026, 10, 2), "Food", "Citi", "y", 7, user="En Jie")]
+    txns = [_txn(date(2026, 10, 1), "Food", "DBS Altitude", 9, user="Jeslin"),
+            _txn(date(2026, 10, 2), "Food", "Citi", 7, user="En Jie")]
     query = TransactionQuery(user="jeslin", card="altitude")
     assert len(filter_transactions(txns, query)) == 1
 
@@ -76,7 +75,7 @@ def test_row_to_billing_rejects_invalid_days():
 
 def test_render_dashboard_returns_png_and_none_when_empty():
     assert render_dashboard([], "October 2026") is None
-    txns = [_txn(date(2026, 10, 1), "Food", "DBS", "lunch", 15.0),
-            _txn(date(2026, 10, 2), "Transport", "Citi", "grab", 12.0)]
+    txns = [_txn(date(2026, 10, 1), "Food", "DBS", 15.0),
+            _txn(date(2026, 10, 2), "Transport", "Citi", 12.0)]
     png = render_dashboard(txns, "October 2026")
     assert png.startswith(b"\x89PNG")

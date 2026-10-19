@@ -13,7 +13,7 @@ Create a spreadsheet with three tabs and these headers in row 1:
 
 | Tab | Headers |
 |---|---|
-| `Transactions` | `Date, Time, User, Category, Amount, Currency, Card, Merchant, Notes, Raw Message, Logged At` |
+| `Transactions` | `Date, Time, User, Category, Amount, Currency, Card, Merchant, Raw Message, Logged At` |
 | `Cards` | `Card Holder, Card, Issuer, Reward Type, Category Rules, Min Spend, Key Exceptions & Traps to Avoid` |
 | `Billing` | `Cardholder, Card, Statement Closing Day, Payment Due Day, Notes` |
 
@@ -22,7 +22,7 @@ Example `Cards` row: `En Jie | DBS Altitude | DBS | miles | dining 3mpd; online 
 
 Copy the sheet ID from its URL: `docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.
 
-**Migrating an existing sheet:** rename the old `Merchant/Notes` header to `Merchant` and insert a `Notes` column after it (before `Raw Message`), so the header matches the table above. Categories must be one of `Groceries, Dining, Transport, Shopping, Bills, Others`; older rows are left as-is.
+**Migrating an existing sheet:** rename the old `Merchant/Notes` header to `Merchant` and delete any `Notes` column in the Transactions tab, so the header matches the table above. Categories must be one of `Groceries, Dining, Transport, Shopping, Bills, Others`; older rows are left as-is.
 
 ## iOS Shortcut payload
 `POST /webhook/ios` with header `X-Webhook-Secret` and JSON body:

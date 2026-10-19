@@ -80,7 +80,7 @@ def email(message_id, subject, body="You made a PayNow transfer of SGD 42.50 to 
 def test_ios_expense_is_appended_with_defaults():
     sheets = FakeSheets()
     gemini = FakeGemini(expense={"date": "", "time": "", "category": "Groceries", "amount": 14.5,
-                                 "currency": "", "card": "", "notes": "NTUC"})
+                                 "currency": "", "card": ""})
     txn = log_ios_expense("DBS: SGD 14.50 charged at NTUC via Apple Pay", "En Jie",
                           gemini, sheets, make_settings(), NOW)
     assert sheets.transactions == [txn]
@@ -141,8 +141,7 @@ def test_gmail_logs_paynow_transfer_with_fixed_values_and_advances_history():
     assert txn.card == "No Card/Bank Transfer"
     assert txn.merchant == "NoMerchant/Paynow"
     assert txn.user == "En Jie"
-    assert txn.notes == ""
-    assert txn.raw == "gmail:m1 | PayNow sent"
+    assert txn.raw == "gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council"
     assert txn.date == date(2026, 10, 1)
     assert txn.time == "10:25"
     assert sheets.state[GMAIL_HISTORY_KEY] == "200"
@@ -160,7 +159,7 @@ def test_gmail_does_not_log_same_message_twice():
     existing = Transaction(date=date(2026, 10, 1), time="09:00", user="En Jie",
                            category="PAYNOW", amount=42.5, currency="SGD",
                            card="No Card/Bank Transfer", merchant="NoMerchant/Paynow",
-                           notes="", raw="gmail:m1 | PayNow sent")
+                           raw="gmail PayNow sent | You made a PayNow transfer of SGD 42.50 to Town Council")
     sheets = FakeSheets(transactions=[existing], state={GMAIL_HISTORY_KEY: "100"})
     gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
     assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []

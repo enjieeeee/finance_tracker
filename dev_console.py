@@ -22,7 +22,7 @@ from gemini_service import THOUGHT, GeminiService
 from reminders import billing_summary
 from sheets_service import SheetsService
 
-SENDER = "DevConsole"
+SENDER = "En Jie"
 CHAT_ID = 0
 
 

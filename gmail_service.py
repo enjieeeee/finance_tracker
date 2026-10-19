@@ -113,6 +113,7 @@ class GmailClient:
                 userId="me",
                 startHistoryId=start_history_id,
                 historyTypes=["messageAdded"],
+                labelId="INBOX",
                 pageToken=page_token,
             ).execute()
             for record in response.get("history", []):

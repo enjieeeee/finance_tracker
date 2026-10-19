@@ -63,7 +63,6 @@ def build_transaction(fields: dict, sender: str, raw: str, settings: Settings,
         currency=fields.get("currency") or settings.default_currency,
         card=card_override.strip() or fields.get("card") or "Unknown",
         merchant=fields.get("merchant", ""),
-        notes=fields.get("notes", ""),
         raw=raw,
         logged_at=now.isoformat(timespec="seconds"),
     )
@@ -87,8 +86,7 @@ def build_paynow_transaction(email: EmailMessage, amount: float, settings: Setti
         currency=PAYNOW_CURRENCY,
         card=PAYNOW_CARD,
         merchant=PAYNOW_MERCHANT,
-        notes="",
-        raw=f"gmail:{email.id} | {email.subject}",
+        raw=f"gmail {email.subject} | {email.body}",
         logged_at=now.isoformat(timespec="seconds"),
     )
 
@@ -115,12 +113,9 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService,
             return []
         raise
 
-    logged_raw = [t.raw for t in sheets.load_transactions()]
+    logged_raw = {t.raw for t in sheets.load_transactions()}
     logged: list[Transaction] = []
     for message_id in dict.fromkeys(message_ids):
-        tag = f"gmail:{message_id}"
-        if any(raw.startswith(tag) for raw in logged_raw):
-            continue
         email = gmail.get_email(message_id)
         if email is None or not is_relevant(email.subject, email.body):
             continue
@@ -129,8 +124,10 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService,
             logger.info("Gmail message %s is not an outgoing PayNow transfer; skipping", message_id)
             continue
         txn = build_paynow_transaction(email, amount, settings, now)
+        if txn.raw in logged_raw:
+            continue
         sheets.append_transaction(txn)
-        logged_raw.append(txn.raw)
+        logged_raw.add(txn.raw)
         logged.append(txn)
 
     sheets.save_state(GMAIL_HISTORY_KEY, latest)
