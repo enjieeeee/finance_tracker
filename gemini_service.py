@@ -44,6 +44,12 @@ EMAIL_SCHEMA = {
                  "merchant"],
 }
 
+PAYNOW_MERCHANT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"merchant": {"type": "STRING", "description": "Recipient name, or empty"}},
+    "required": ["merchant"],
+}
+
 CATEGORY_RULE = ("- category is exactly one of: Groceries, Dining, Transport, Shopping, Bills, "
                  "Others.\n")
 
@@ -136,6 +142,15 @@ class GeminiService:
             f'Subject: """{subject}"""\nFrom: """{sender}"""\nBody: """{body}"""'
         )
         return self._json(prompt, EMAIL_SCHEMA)
+
+    def parse_paynow_merchant(self, subject: str, body: str) -> str:
+        prompt = (
+            "This is a bank email about a PayNow transfer the couple sent. "
+            "Return the recipient's name, exactly as written in the email. "
+            "Return an empty string if no recipient is named.\n\n"
+            f'Subject: """{subject}"""\nBody: """{body}"""'
+        )
+        return (self._json(prompt, PAYNOW_MERCHANT_SCHEMA).get("merchant") or "").strip()
 
 
 

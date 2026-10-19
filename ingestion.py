@@ -75,7 +75,7 @@ def is_gmail_rate_limited(exc: HttpError) -> bool:
 
 
 def build_paynow_transaction(email: EmailMessage, amount: float, settings: Settings,
-                             now: datetime) -> Transaction:
+                             now: datetime, merchant: str = "") -> Transaction:
     when = email.sent_at.astimezone(settings.tz) if email.sent_at else now
     return Transaction(
         date=when.date(),
@@ -85,14 +85,15 @@ def build_paynow_transaction(email: EmailMessage, amount: float, settings: Setti
         amount=amount,
         currency=PAYNOW_CURRENCY,
         card=PAYNOW_CARD,
-        merchant=PAYNOW_MERCHANT,
+        merchant=merchant or PAYNOW_MERCHANT,
         raw=f"gmail {email.subject} | {email.body}",
         logged_at=now.isoformat(timespec="seconds"),
     )
 
 
 def sync_gmail(gmail: GmailClient, sheets: SheetsService,
-               settings: Settings, push_history_id: str, now: datetime) -> list[Transaction]:
+               settings: Settings, push_history_id: str, now: datetime,
+               gemini: GeminiService | None = None) -> list[Transaction]:
     """Log outgoing PayNow transfers since the last stored historyId. Safe to retry."""
     start = sheets.load_state(GMAIL_HISTORY_KEY)
     if not start:
@@ -123,7 +124,13 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService,
         if amount is None:
             logger.info("Gmail message %s is not an outgoing PayNow transfer; skipping", message_id)
             continue
-        txn = build_paynow_transaction(email, amount, settings, now)
+        merchant = ""
+        if gemini is not None:
+            try:
+                merchant = gemini.parse_paynow_merchant(email.subject, email.body)
+            except Exception:
+                logger.exception("Merchant extraction failed for %s; using default", message_id)
+        txn = build_paynow_transaction(email, amount, settings, now, merchant=merchant)
         if txn.raw in logged_raw:
             continue
         sheets.append_transaction(txn)

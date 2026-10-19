@@ -46,15 +46,21 @@ class FakeSheets:
 
 
 class FakeGemini:
-    def __init__(self, expense=None, emails=None):
+    def __init__(self, expense=None, emails=None, paynow_merchant="Town Council"):
         self.expense = expense
         self.emails = emails or {}
         self.email_calls = []
+        self.paynow_merchant = paynow_merchant
 
     def parse_expense(self, text, sender, today):
         if self.expense is None:
             raise ValueError("no amount")
         return self.expense
+
+    def parse_paynow_merchant(self, subject, body):
+        if self.paynow_merchant is None:
+            raise RuntimeError("gemini down")
+        return self.paynow_merchant
 
 class FakeGmail:
     def __init__(self, ids=(), latest="200", messages=None, history_error=None):
@@ -145,6 +151,20 @@ def test_gmail_logs_paynow_transfer_with_fixed_values_and_advances_history():
     assert txn.date == date(2026, 10, 1)
     assert txn.time == "10:25"
     assert sheets.state[GMAIL_HISTORY_KEY] == "200"
+
+
+def test_gmail_paynow_merchant_comes_from_gemini_and_falls_back_on_error():
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW, gemini=FakeGemini())
+    assert logged[0].merchant == "Town Council"
+
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], messages={"m1": email("m1", "PayNow sent")})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW,
+                        gemini=FakeGemini(paynow_merchant=None))
+    assert len(logged) == 1
+    assert logged[0].merchant == "NoMerchant/Paynow"
 
 
 def test_gmail_skips_email_without_paynow_amount():
