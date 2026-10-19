@@ -159,7 +159,7 @@ async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
 def build_application(settings: Settings) -> Application:
     application = ApplicationBuilder().token(settings.telegram_bot_token).updater(None).build()
     sheets = SheetsService(settings.google_sheet_id, settings.service_account_json)
-    gemini = GeminiService(settings.gemini_api_key, settings.gemini_model)
+    gemini = GeminiService(settings.gemini_api_key, settings.gemini_models)
     application.bot_data.update(
         settings=settings,
         sheets=sheets,

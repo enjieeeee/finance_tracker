@@ -57,12 +57,12 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARNING, format="%(message)s")
     load_dotenv()
     settings = load_settings()
-    gemini = GeminiService(settings.gemini_api_key, settings.gemini_model)
+    gemini = GeminiService(settings.gemini_api_key, settings.gemini_models)
     sheets = SheetsService(settings.google_sheet_id, settings.service_account_json)
 
     mode = "WRITE mode" if args.write else "dry run"
     assistant = Assistant(gemini, sheets, settings, write=args.write)
-    print(f"Dev console ({mode}, model {settings.gemini_model}). Type a message, or 'billing' / 'clear' / 'quit'.")
+    print(f"Dev console ({mode}, models {', '.join(settings.gemini_models)}). Type a message, or 'billing' / 'clear' / 'quit'.")
     while True:
         try:
             text = input("\n> ").strip()

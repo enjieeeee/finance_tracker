@@ -15,7 +15,7 @@ class Settings:
     allowed_user_ids: frozenset[int]
     reminder_chat_id: int | None
     gemini_api_key: str
-    gemini_model: str
+    gemini_models: tuple[str, ...]
     google_sheet_id: str
     service_account_json: str
     default_currency: str
@@ -43,6 +43,24 @@ def _required(name: str) -> str:
     return value
 
 
+DEFAULT_GEMINI_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash-lite",
+)
+
+
+def _gemini_models() -> tuple[str, ...]:
+    """GEMINI_MODELS is a comma-separated priority list; the first model with quota is used."""
+    raw = os.getenv("GEMINI_MODELS", "")
+    models = tuple(m.strip() for m in raw.split(",") if m.strip())
+    return models or DEFAULT_GEMINI_MODELS
+
+
 def load_settings() -> Settings:
     reminder_chat = os.getenv("REMINDER_CHAT_ID", "").strip()
     allowed = {int(x) for x in _required("ALLOWED_USER_IDS").split(",") if x.strip()}
@@ -53,7 +71,7 @@ def load_settings() -> Settings:
         allowed_user_ids=frozenset(allowed),
         reminder_chat_id=int(reminder_chat) if reminder_chat else None,
         gemini_api_key=_required("GEMINI_API_KEY"),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip(),
+        gemini_models=_gemini_models(),
         google_sheet_id=_required("GOOGLE_SHEET_ID"),
         service_account_json=_required("GOOGLE_SERVICE_ACCOUNT_JSON"),
         default_currency=os.getenv("DEFAULT_CURRENCY", "SGD").strip(),

@@ -20,7 +20,7 @@ def make_settings(**overrides) -> Settings:
     base = dict(
         telegram_bot_token="t", webhook_url="https://x", webhook_secret="s",
         allowed_user_ids=frozenset({1}), reminder_chat_id=None, gemini_api_key="k",
-        gemini_model="m", google_sheet_id="id", service_account_json="{}",
+        gemini_models=("m",), google_sheet_id="id", service_account_json="{}",
         default_currency="SGD", timezone="Asia/Singapore", gmail_owner_name="En Jie",
     )
     base.update(overrides)

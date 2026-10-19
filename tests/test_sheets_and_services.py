@@ -1,4 +1,5 @@
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,3 +80,53 @@ def test_render_dashboard_returns_png_and_none_when_empty():
             _txn(date(2026, 10, 2), "Transport", "Citi", 12.0)]
     png = render_dashboard(txns, "October 2026")
     assert png.startswith(b"\x89PNG")
+
+
+def _client_error(code, status):
+    from google.genai import errors
+    return errors.ClientError(code, {"error": {"code": code, "status": status}})
+
+
+def test_json_falls_back_to_next_model_when_quota_exhausted():
+    service = GeminiService.__new__(GeminiService)
+    service._models = ("first", "second")
+    calls = []
+
+    def generate_content(model, **kwargs):
+        calls.append(model)
+        if model == "first":
+            raise _client_error(429, "RESOURCE_EXHAUSTED")
+        return SimpleNamespace(text='{"merchant": "doctorHEE"}')
+
+    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    assert service.parse_paynow_merchant("subject", "body") == "doctorHEE"
+    assert calls == ["first", "second"]
+
+
+def test_json_raises_non_quota_errors_without_fallback():
+    from google.genai import errors
+    service = GeminiService.__new__(GeminiService)
+    service._models = ("first", "second")
+    calls = []
+
+    def generate_content(model, **kwargs):
+        calls.append(model)
+        raise _client_error(400, "INVALID_ARGUMENT")
+
+    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    with pytest.raises(errors.ClientError):
+        service.parse_paynow_merchant("subject", "body")
+    assert calls == ["first"]
+
+
+def test_json_falls_back_when_model_not_found():
+    service = GeminiService.__new__(GeminiService)
+    service._models = ("missing", "second")
+
+    def generate_content(model, **kwargs):
+        if model == "missing":
+            raise _client_error(404, "NOT_FOUND")
+        return SimpleNamespace(text='{"merchant": "doctorHEE"}')
+
+    service._client = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    assert service.parse_paynow_merchant("subject", "body") == "doctorHEE"

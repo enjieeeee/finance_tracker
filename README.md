@@ -53,7 +53,7 @@ Copy `.env.example` to `.env` and fill it in. Never commit `.env`.
 | `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs allowed to use the bot |
 | `REMINDER_CHAT_ID` | Chat that receives scheduled reminders |
 | `GEMINI_API_KEY` | Gemini key |
-| `GEMINI_MODEL` | Defaults to `gemini-3.5-flash`; verify the model ID is available to your key |
+| `GEMINI_MODELS` | Comma-separated priority list. When a model returns 429 (daily quota used up) or 404 (not available to your key), the next one is tried. Defaults to the free-tier list: `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-flash-lite`. Verify the IDs are available to your key |
 | `GOOGLE_SHEET_ID` | Spreadsheet ID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to the key file, or the JSON inline |
 | `DEFAULT_CURRENCY` | Default `SGD` |

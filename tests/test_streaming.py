@@ -24,7 +24,7 @@ class FakeModels:
 
 def test_stream_separates_thoughts_from_answer():
     service = GeminiService.__new__(GeminiService)
-    service._model = "m"
+    service._models = ("m",)
     service._client = SimpleNamespace(models=FakeModels([
         _chunk(_part("Checking rows", thought=True)),
         _chunk(_part("You spent $15."), _part("")),
@@ -52,3 +52,22 @@ def test_stream_reply_ends_with_answer_and_footer():
 
     assert answer == "You spent $15."
     assert message.edits[-1] == "You spent $15.\n\n(1 row)"
+
+
+def test_stream_falls_back_when_quota_error_raised_on_first_iteration():
+    from google.genai import errors
+
+    def stream_for(model, **kwargs):
+        def chunks():
+            if model == "first":
+                raise errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}})
+            yield _chunk(_part("You spent $15."))
+        return chunks()
+
+    service = GeminiService.__new__(GeminiService)
+    service._models = ("first", "second")
+    service._client = SimpleNamespace(models=SimpleNamespace(generate_content_stream=stream_for))
+
+    collected = []
+    chunks = list(service.stream_turn([], "system", [], collected))
+    assert chunks == [(ANSWER, "You spent $15.")]
