@@ -65,6 +65,12 @@ def build_transaction(fields: dict, sender: str, raw: str, settings: Settings,
     )
 
 
+def is_gmail_rate_limited(exc: HttpError) -> bool:
+    if exc.resp.status == 429:
+        return True
+    return exc.resp.status == 403 and b"rateLimitExceeded" in (exc.content or b"")
+
+
 def sync_gmail(gmail: GmailClient, sheets: SheetsService, gemini: GeminiService,
                settings: Settings, push_history_id: str, now: datetime) -> list[Transaction]:
     """Log outgoing-money emails since the last stored historyId. Safe to retry."""
@@ -77,11 +83,15 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService, gemini: GeminiService,
     try:
         message_ids, latest = gmail.new_message_ids(start)
     except HttpError as exc:
-        if exc.resp.status != 404:
-            raise
-        logger.warning("Stored historyId %s is too old; resetting to %s", start, push_history_id)
-        sheets.save_state(GMAIL_HISTORY_KEY, push_history_id)
-        return []
+        if exc.resp.status == 404:
+            logger.warning("Stored historyId %s is too old; resetting to %s", start, push_history_id)
+            sheets.save_state(GMAIL_HISTORY_KEY, push_history_id)
+            return []
+        if is_gmail_rate_limited(exc):
+            # Keep the baseline so the next push retries these messages; a 500 would make Pub/Sub retry and worsen the quota.
+            logger.warning("Gmail quota exceeded; skipping push, baseline %s kept", start)
+            return []
+        raise
 
     logged_raw = [t.raw for t in sheets.load_transactions()]
     logged: list[Transaction] = []

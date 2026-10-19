@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -178,6 +179,15 @@ def test_gmail_skips_irrelevant_email_without_calling_gemini():
     assert gemini.email_calls == []
 
 
+def test_gmail_rate_limit_skips_without_advancing_history():
+    quota = HttpError(SimpleNamespace(status=403, reason="Forbidden"),
+                      b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "1"})
+    gmail = FakeGmail(history_error=quota)
+    assert sync_gmail(gmail, sheets, FakeGemini(), make_settings(), "500", NOW) == []
+    assert sheets.state[GMAIL_HISTORY_KEY] == "1"
+
+
 def test_gmail_resets_when_stored_history_is_expired():
     not_found = HttpError(SimpleNamespace(status=404, reason="Not Found"), b"gone")
     sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "1"})
@@ -213,3 +223,37 @@ def test_body_prefers_plain_text_over_html():
 def test_body_strips_html_when_no_plain_text():
     payload = {"mimeType": "text/html", "body": {"data": _b64url("<p>You paid <b>$5</b></p>")}}
     assert extract_body(payload) == "You paid $5"
+
+
+REFERENCE = Path(__file__).parent / "reference"
+
+
+def load_reference(name):
+    return json.loads((REFERENCE / name).read_text())
+
+
+def test_uob_paynow_outbound_template_is_relevant_and_logged():
+    template = load_reference("Paynow_outboundtransfer.json")
+    assert is_relevant(template["subject"], template["raw_content"])
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"], template["raw_content"])})
+    gemini = FakeGemini(emails={template["subject"]: {
+        **OUTGOING, "amount": 200.0, "merchant": "YOU TECHNOLOGIES GRO", "card": "UOB 3606",
+        "date": "2026-10-01", "time": "10:25", "category": "Others"}})
+    logged = sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW)
+    assert len(logged) == 1
+    assert logged[0].amount == 200.0
+    assert logged[0].merchant == "YOU TECHNOLOGIES GRO"
+
+
+def test_uob_paynow_inbound_template_is_not_logged():
+    template = load_reference("Paynow_Inboundtransfer.json")
+    assert is_relevant(template["subject"], template["raw_content"])
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"], template["raw_content"])})
+    gemini = FakeGemini(emails={template["subject"]: {
+        **OUTGOING, "direction": "incoming", "amount": 118.29}})
+    assert sync_gmail(gmail, sheets, gemini, make_settings(), "999", NOW) == []
+    assert sheets.transactions == []

@@ -149,24 +149,31 @@ class SheetsService:
         else:
             raise RuntimeError(f"GOOGLE_SERVICE_ACCOUNT_JSON is neither an existing file nor JSON: {service_account_json}")
         self._spreadsheet = gspread.authorize(creds).open_by_key(sheet_id)
+        self._tabs: dict[str, gspread.Worksheet] = {}
+
+    def _tab(self, name: str) -> gspread.Worksheet:
+        # worksheet() re-fetches sheet metadata (a Sheets read) on every call; cache the handle.
+        if name not in self._tabs:
+            self._tabs[name] = self._spreadsheet.worksheet(name)
+        return self._tabs[name]
 
     def load_transactions(self) -> list[Transaction]:
-        rows = self._spreadsheet.worksheet(TRANSACTIONS_TAB).get_all_records()
+        rows = self._tab(TRANSACTIONS_TAB).get_all_records()
         return [t for t in (row_to_transaction(r) for r in rows) if t is not None]
 
     def append_transaction(self, t: Transaction) -> None:
-        self._spreadsheet.worksheet(TRANSACTIONS_TAB).append_row(
+        self._tab(TRANSACTIONS_TAB).append_row(
             [t.date.isoformat(), t.time, t.user, t.category, t.amount, t.currency,
              t.card, t.merchant, t.notes, t.raw, t.logged_at],
             value_input_option="RAW",
         )
 
     def load_billing(self) -> list[BillingRule]:
-        rows = self._spreadsheet.worksheet(BILLING_TAB).get_all_records()
+        rows = self._tab(BILLING_TAB).get_all_records()
         return [r for r in (row_to_billing(row) for row in rows) if r is not None]
 
     def load_cards_text(self) -> str:
-        return cards_as_text(self._spreadsheet.worksheet(CARDS_TAB).get_all_records())
+        return cards_as_text(self._tab(CARDS_TAB).get_all_records())
 
     def load_state(self, key: str) -> Optional[str]:
         for row in self._state_sheet().get_all_records():
@@ -184,9 +191,10 @@ class SheetsService:
 
     def _state_sheet(self):
         try:
-            return self._spreadsheet.worksheet(STATE_TAB)
+            return self._tab(STATE_TAB)
         except gspread.WorksheetNotFound:
             sheet = self._spreadsheet.add_worksheet(title=STATE_TAB, rows=50, cols=2)
             sheet.append_row(STATE_HEADERS, value_input_option="RAW")
+            self._tabs[STATE_TAB] = sheet
             return sheet
 

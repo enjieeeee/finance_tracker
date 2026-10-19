@@ -130,6 +130,9 @@ class GeminiService:
             "- amount is a plain number without currency symbols.\n"
             "- merchant is the merchant or recipient name.\n"
             "- card is the payment method, e.g. 'PayNow DBS' or 'DBS card'.\n"
+            "- UOB alerts read 'You made a PayNow transfer of SGD 200.00 to NAME ... on your a/c "
+            "ending 3606' (outgoing) or 'You have received SGD 118.29 in your PayNow-linked account "
+            "ending 3606' (incoming). For these, card is 'UOB 3606' and merchant is the NAME.\n"
             + CATEGORY_RULE +
             "- Leave date, time, currency or card empty if they are not stated.\n\n"
             f'Subject: """{subject}"""\nFrom: """{sender}"""\nBody: """{body}"""'

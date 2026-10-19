@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 .yaml
 env.yaml
+/tests/reference/

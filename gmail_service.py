@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,7 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 RELEVANT_KEYWORDS = re.compile(
     r"paynow|transfer|receipt|invoice|bill|payment|paid|charged|debit|transaction|"
+    r"you made|account ending|a/c ending|"
     r"order|purchase|statement|grab|shopee|lazada|fairprice|ntuc|amount|\$",
     re.IGNORECASE,
 )
@@ -104,9 +106,13 @@ class GmailClient:
                 return ids, latest
 
     def get_email(self, message_id: str) -> EmailMessage | None:
-        message = self._service.users().messages().get(
-            userId="me", id=message_id, format="full").execute()
-        if "SENT" in message.get("labelIds", []):
+        try:
+            message = self._service.users().messages().get(
+                userId="me", id=message_id, format="full").execute()
+        except HttpError as exc:
+            if exc.resp.status != 404:
+                raise
+            logger.warning("Gmail message %s no longer exists; skipping", message_id)
             return None
         payload = message.get("payload", {})
         headers = payload.get("headers", [])
