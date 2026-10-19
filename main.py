@@ -186,15 +186,19 @@ def build_application(settings: Settings) -> Application:
     return application
 
 
-async def renew_gmail_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gmail watches expire after 7 days, so renew daily."""
-    settings: Settings = context.bot_data["settings"]
-    gmail: GmailClient | None = context.bot_data["gmail"]
-    if gmail is None:
+async def start_gmail_watch(settings: Settings, gmail: GmailClient | None) -> None:
+    """Register (or renew) the Gmail push watch. Gmail watches expire after 7 days."""
+    if gmail is None or not settings.gmail_pubsub_topic:
         return
-    if settings.gmail_pubsub_topic:
+    try:
         await asyncio.to_thread(gmail.watch, settings.gmail_pubsub_topic)
-        logger.info("Renewed Gmail watch")
+        logger.info("Gmail watch registered")
+    except Exception:
+        logger.exception("Could not register Gmail watch")
+
+
+async def renew_gmail_watch(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await start_gmail_watch(context.bot_data["settings"], context.bot_data["gmail"])
 
 
 def create_app() -> FastAPI:
@@ -210,6 +214,7 @@ def create_app() -> FastAPI:
             secret_token=settings.webhook_secret,
             allowed_updates=Update.ALL_TYPES,
         )
+        await start_gmail_watch(settings, telegram_app.bot_data["gmail"])
         yield
         await telegram_app.stop()
         await telegram_app.shutdown()
