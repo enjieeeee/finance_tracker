@@ -22,6 +22,7 @@ from chart_generator import render_dashboard
 from config import Settings, load_settings
 from gmail_service import GmailClient, decode_push_history_id
 from ingestion import sync_gmail
+from nl_compiler import compile_command
 from queries import (
     SEARCH_USAGE,
     STATEMENT_USAGE,
@@ -92,9 +93,27 @@ async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 @allowed_only
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "Free-text chat is off. Send /help to see the commands."
+    settings: Settings = context.bot_data["settings"]
+    message = update.effective_message
+    if not settings.groq_api_key:
+        await message.reply_text("Free-text chat is off. Send /help to see the commands.")
+        return
+    compiled = await compile_command(
+        message.text,
+        datetime.now(settings.tz).date(),
+        settings.groq_api_key,
+        settings.groq_model,
     )
+    if compiled is None:
+        await message.reply_text(
+            "I couldn't turn that into a command. Send /help to see the options."
+        )
+        return
+    if compiled.command == "help":
+        await _reply(message, HELP_TEXT)
+        return
+    await message.reply_text(f"Running: {shlex.join(['/' + compiled.command, *compiled.args])}")
+    await FREE_TEXT_RUNNERS[compiled.command](message, context, compiled.args)
 
 
 def _command_args(message_text: str) -> list[str]:
@@ -128,12 +147,9 @@ def split_message(text: str, limit: int = TELEGRAM_MAX_CHARS) -> list[str]:
     return chunks
 
 
-@allowed_only
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_search(message, context, args: list[str]) -> None:
     sheets: SheetsService = context.bot_data["sheets"]
-    message = update.effective_message
     try:
-        args = _command_args(message.text)
         if not args:
             raise QueryError(SEARCH_USAGE)
         query = parse_search(args)
@@ -144,13 +160,10 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _reply(message, format_search(transactions, query))
 
 
-@allowed_only
-async def statement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_statement(message, context, args: list[str]) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
-    message = update.effective_message
     try:
-        args = _command_args(message.text)
         if len(args) > 1:
             raise QueryError(STATEMENT_USAGE)
         today = datetime.now(settings.tz).date()
@@ -162,13 +175,10 @@ async def statement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _reply(message, format_statement(transactions, start, today))
 
 
-@allowed_only
-async def total_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_total(message, context, args: list[str]) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
-    message = update.effective_message
     try:
-        args = _command_args(message.text)
         if len(args) > 1:
             raise QueryError(TOTAL_USAGE)
         count = parse_month_count(args[0] if args else "", TOTAL_USAGE)
@@ -180,18 +190,16 @@ async def total_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _reply(message, format_totals(transactions, months))
 
 
-@allowed_only
-async def cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_cards(message, context, args: list[str]) -> None:
     sheets: SheetsService = context.bot_data["sheets"]
     rows = await asyncio.to_thread(sheets.load_cards_rows)
-    await _reply(update.effective_message, format_cards(rows))
+    await _reply(message, format_cards(rows))
 
 
-@allowed_only
-async def billing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_billing(message, context, args: list[str]) -> None:
     sheets: SheetsService = context.bot_data["sheets"]
     rules = await asyncio.to_thread(sheets.load_billing)
-    await _reply(update.effective_message, format_billing(rules))
+    await _reply(message, format_billing(rules))
 
 
 def _format_saved(txn: Transaction) -> str:
@@ -209,16 +217,15 @@ async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
             logger.exception("Could not notify user %s", user_id)
 
 
-@allowed_only
-async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_dashboard(message, context, args: list[str]) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
     today = datetime.now(settings.tz).date()
-    arg = context.args[0] if context.args else today.strftime("%Y-%m")
+    arg = args[0] if args else today.strftime("%Y-%m")
     try:
         month = datetime.strptime(arg, "%Y-%m").date()
     except ValueError:
-        await update.effective_message.reply_text("Usage: /dashboard YYYY-MM")
+        await message.reply_text("Usage: /dashboard YYYY-MM")
         return
 
     label = month.strftime("%B %Y")
@@ -226,9 +233,43 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     monthly = [t for t in transactions if (t.date.year, t.date.month) == (month.year, month.month)]
     png = await asyncio.to_thread(render_dashboard, monthly, label)
     if png is None:
-        await update.effective_message.reply_text(f"No transactions recorded for {label}.")
+        await message.reply_text(f"No transactions recorded for {label}.")
         return
-    await update.effective_message.reply_photo(photo=png, caption=f"Spending for {label}")
+    await message.reply_photo(photo=png, caption=f"Spending for {label}")
+
+
+def _command_handler(runner):
+    """Slash-command handler that passes the parsed arguments to a runner."""
+
+    @allowed_only
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        try:
+            args = _command_args(message.text)
+        except QueryError as exc:
+            await message.reply_text(str(exc))
+            return
+        await runner(message, context, args)
+
+    handler.__name__ = runner.__name__.replace("run_", "") + "_command"
+    return handler
+
+
+search_command = _command_handler(run_search)
+statement_command = _command_handler(run_statement)
+total_command = _command_handler(run_total)
+cards_command = _command_handler(run_cards)
+billing_command = _command_handler(run_billing)
+dashboard_command = _command_handler(run_dashboard)
+
+FREE_TEXT_RUNNERS = {
+    "search": run_search,
+    "statement": run_statement,
+    "total": run_total,
+    "cards": run_cards,
+    "billing": run_billing,
+    "dashboard": run_dashboard,
+}
 
 
 async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -268,7 +309,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("total", total_command))
     application.add_handler(CommandHandler("cards", cards_command))
     application.add_handler(CommandHandler("billing", billing_command))
-    application.add_handler(CommandHandler("dashboard", dashboard))
+    application.add_handler(CommandHandler("dashboard", dashboard_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.job_queue.run_daily(
         send_daily_reminders,

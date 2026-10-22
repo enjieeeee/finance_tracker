@@ -8,7 +8,7 @@ A Telegram bot for a couple. It records expenses from Gmail alerts into a shared
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
 
-Free-text messages get a short help reply. Use the commands below.
+Free-text messages are turned into commands by Groq (`GROQ_API_KEY`). The LLM only picks a command and its arguments; the bot runs them through the same validated code as the slash commands, so it never answers from its own knowledge. The bot echoes the command it ran (e.g. `Running: /total 2`). Without `GROQ_API_KEY`, free text gets a short help reply.
 
 ## 1. Google Sheet
 Create a spreadsheet with three tabs and these headers in row 1:
@@ -46,6 +46,8 @@ Copy `.env.example` to `.env` and fill it in. Never commit `.env`.
 | `WEBHOOK_URL` | Public HTTPS URL of the service (set after the first deploy) |
 | `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs allowed to use the bot |
 | `REMINDER_CHAT_ID` | Chat that receives scheduled reminders |
+| `GROQ_API_KEY` | Groq key; enables free-text questions (optional) |
+| `GROQ_MODEL` | Groq model ID (default `openai/gpt-oss-120b`) |
 | `GOOGLE_SHEET_ID` | Spreadsheet ID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to the key file, or the JSON inline |
 | `DEFAULT_CURRENCY` | Default `SGD` |
