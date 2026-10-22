@@ -21,19 +21,27 @@ RELEVANT_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 PAYNOW_OUTGOING = re.compile(
-    r"You made a PayNow transfer of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+    r"You made a PayNow transfer of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE
+)
 PAYNOW_RECIPIENT = re.compile(
     r"You made a PayNow transfer of (?:SGD|S\$)\s?[\d,]+(?:\.\d+)? to (.+?)"
-    r"(?:\s*\(UEN[^)]*\))?\s+on your a/c", re.IGNORECASE)
+    r"(?:\s*\(UEN[^)]*\))?\s+on your a/c",
+    re.IGNORECASE,
+)
 CARD_ALERT = re.compile(
     r"A transaction of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) was made with your (.+?) ending (\d{4}) "
-    r"on (\d{2}/\d{2}/\d{2}) at (.+?)\.(?:\s|$)", re.IGNORECASE)
+    r"on (\d{2}/\d{2}/\d{2}) at (.+?)\.(?:\s|$)",
+    re.IGNORECASE,
+)
 QR_OUTGOING = re.compile(
     r"You made a NETS QR payment of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) to (.+?) on your a/c ending",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 TRANSIT_CHARGE = re.compile(
     r"accumulated transit transactions of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) has been billed to your "
-    r"(.+?) ending (\d{4}) on (\d{2}/\d{2}/\d{2})", re.IGNORECASE)
+    r"(.+?) ending (\d{4}) on (\d{2}/\d{2}/\d{2})",
+    re.IGNORECASE,
+)
 TRANSIT_MERCHANT = "SMRT CORPORATION LTD"
 TRANSIT_CATEGORY = "transport"
 MAX_BODY_CHARS = 4000
@@ -148,7 +156,8 @@ def _find_part(payload: dict, mime: str) -> str:
 
 def extract_body(payload: dict) -> str:
     text = _find_part(payload, "text/plain") or re.sub(
-        r"<[^>]+>", " ", _find_part(payload, "text/html"))
+        r"<[^>]+>", " ", _find_part(payload, "text/html")
+    )
     return re.sub(r"\s+", " ", text).strip()[:MAX_BODY_CHARS]
 
 
@@ -166,8 +175,11 @@ class GmailClient:
 
     def watch(self, topic: str) -> str:
         """Start or renew push notifications to a Pub/Sub topic. Returns the current historyId."""
-        response = self._service.users().watch(
-            userId="me", body={"topicName": topic, "labelIds": ["INBOX"]}).execute()
+        response = (
+            self._service.users()
+            .watch(userId="me", body={"topicName": topic, "labelIds": ["INBOX"]})
+            .execute()
+        )
         return str(response["historyId"])
 
     def new_message_ids(self, start_history_id: str) -> tuple[list[str], str]:
@@ -176,13 +188,18 @@ class GmailClient:
         latest = start_history_id
         page_token = None
         while True:
-            response = self._service.users().history().list(
-                userId="me",
-                startHistoryId=start_history_id,
-                historyTypes=["messageAdded"],
-                labelId="INBOX",
-                pageToken=page_token,
-            ).execute()
+            response = (
+                self._service.users()
+                .history()
+                .list(
+                    userId="me",
+                    startHistoryId=start_history_id,
+                    historyTypes=["messageAdded"],
+                    labelId="INBOX",
+                    pageToken=page_token,
+                )
+                .execute()
+            )
             for record in response.get("history", []):
                 for added in record.get("messagesAdded", []):
                     ids.append(added["message"]["id"])
@@ -193,8 +210,12 @@ class GmailClient:
 
     def get_email(self, message_id: str) -> EmailMessage | None:
         try:
-            message = self._service.users().messages().get(
-                userId="me", id=message_id, format="full").execute()
+            message = (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="full")
+                .execute()
+            )
         except HttpError as exc:
             if exc.resp.status != 404:
                 raise

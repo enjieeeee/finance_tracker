@@ -15,19 +15,30 @@ def _bar_panel(ax, series: pd.Series, title: str, currency: str) -> None:
     ax.set_ylabel(currency)
     ax.tick_params(axis="x", rotation=30)
     for bar, value in zip(bars, series.values):
-        ax.annotate(f"{value:,.2f}", (bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                    ha="center", va="bottom", fontsize=8)
+        ax.annotate(
+            f"{value:,.2f}",
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
 
 def render_dashboard(transactions: list[Transaction], month_label: str) -> bytes | None:
     """Return PNG bytes for spending by category and by card, or None if there is no data."""
     if not transactions:
         return None
-    df = pd.DataFrame([
-        {"category": t.category or "Other", "card": t.card or "Unknown",
-         "amount": t.amount, "currency": t.currency}
-        for t in transactions
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "category": t.category or "Other",
+                "card": t.card or "Unknown",
+                "amount": t.amount,
+                "currency": t.currency,
+            }
+            for t in transactions
+        ]
+    )
     currencies = [t.currency for t in transactions if t.currency]
     currency = max(set(currencies), key=currencies.count) if currencies else ""
     by_category = df.groupby("category")["amount"].sum().sort_values(ascending=False)

@@ -24,6 +24,7 @@ class Settings:
     gmail_push_token: str = ""
     gmail_pubsub_topic: str = ""
     gmail_owner_name: str = "Email"
+
     @property
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)

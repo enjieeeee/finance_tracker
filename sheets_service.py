@@ -16,11 +16,26 @@ BILLING_TAB = "Billing"
 STATE_TAB = "State"
 
 TRANSACTION_HEADERS = [
-    "Date", "Time", "User", "Category", "Amount", "Currency",
-    "Card", "Merchant", "Raw Message", "Logged At",
+    "Date",
+    "Time",
+    "User",
+    "Category",
+    "Amount",
+    "Currency",
+    "Card",
+    "Merchant",
+    "Raw Message",
+    "Logged At",
 ]
-CARD_HEADERS = ["Card Holder", "Card", "Issuer", "Reward Type", "Category Rules", "Min Spend",
-                "Key Exceptions & Traps to Avoid"]
+CARD_HEADERS = [
+    "Card Holder",
+    "Card",
+    "Issuer",
+    "Reward Type",
+    "Category Rules",
+    "Min Spend",
+    "Key Exceptions & Traps to Avoid",
+]
 BILLING_HEADERS = ["Cardholder", "Card", "Statement Closing Day", "Payment Due Day", "Notes"]
 STATE_HEADERS = ["Key", "Value"]
 
@@ -110,7 +125,9 @@ def row_to_billing(row: dict) -> Optional[BillingRule]:
     return BillingRule(card=card, closing_day=closing, due_day=due, cardholder=cardholder)
 
 
-def filter_transactions(transactions: list[Transaction], query: TransactionQuery) -> list[Transaction]:
+def filter_transactions(
+    transactions: list[Transaction], query: TransactionQuery
+) -> list[Transaction]:
     def contains(field: str, needle: str) -> bool:
         return not needle or needle.lower() in field.lower()
 
@@ -120,9 +137,11 @@ def filter_transactions(transactions: list[Transaction], query: TransactionQuery
             continue
         if query.end and t.date > query.end:
             continue
-        if not (contains(t.category, query.category)
-                and contains(t.card, query.card)
-                and contains(t.user, query.user)):
+        if not (
+            contains(t.category, query.category)
+            and contains(t.card, query.card)
+            and contains(t.user, query.user)
+        ):
             continue
         if not contains(f"{t.merchant} {t.raw}", query.merchant):
             continue
@@ -141,23 +160,19 @@ def card_names_by_ending(rows: list[dict]) -> dict[str, str]:
     return mapping
 
 
-def cards_as_text(rows: list[dict]) -> str:
-    lines = []
-    for row in rows:
-        parts = [f"{k}: {str(v).strip()}" for k, v in row.items() if str(v).strip()]
-        if parts:
-            lines.append(" | ".join(parts))
-    return "\n".join(lines)
-
-
 class SheetsService:
     def __init__(self, sheet_id: str, service_account_json: str):
         if os.path.isfile(service_account_json):
             creds = Credentials.from_service_account_file(service_account_json, scopes=SCOPES)
         elif service_account_json.lstrip().startswith("{"):
-            creds = Credentials.from_service_account_info(json.loads(service_account_json), scopes=SCOPES)
+            creds = Credentials.from_service_account_info(
+                json.loads(service_account_json), scopes=SCOPES
+            )
         else:
-            raise RuntimeError(f"GOOGLE_SERVICE_ACCOUNT_JSON is neither an existing file nor JSON: {service_account_json}")
+            raise RuntimeError(
+                "GOOGLE_SERVICE_ACCOUNT_JSON is neither an existing file nor JSON: "
+                f"{service_account_json}"
+            )
         self._spreadsheet = gspread.authorize(creds).open_by_key(sheet_id)
         self._tabs: dict[str, gspread.Worksheet] = {}
 
@@ -173,8 +188,18 @@ class SheetsService:
 
     def append_transaction(self, t: Transaction) -> None:
         self._tab(TRANSACTIONS_TAB).append_row(
-            [t.date.isoformat(), t.time, t.user, t.category, t.amount, t.currency,
-             t.card, t.merchant, t.raw, t.logged_at],
+            [
+                t.date.isoformat(),
+                t.time,
+                t.user,
+                t.category,
+                t.amount,
+                t.currency,
+                t.card,
+                t.merchant,
+                t.raw,
+                t.logged_at,
+            ],
             value_input_option="RAW",
         )
 
@@ -182,8 +207,8 @@ class SheetsService:
         rows = self._tab(BILLING_TAB).get_all_records()
         return [r for r in (row_to_billing(row) for row in rows) if r is not None]
 
-    def load_cards_text(self) -> str:
-        return cards_as_text(self._tab(CARDS_TAB).get_all_records())
+    def load_cards_rows(self) -> list[dict]:
+        return self._tab(CARDS_TAB).get_all_records()
 
     def load_card_names_by_ending(self) -> dict[str, str]:
         return card_names_by_ending(self._tab(CARDS_TAB).get_all_records())
@@ -210,4 +235,3 @@ class SheetsService:
             sheet.append_row(STATE_HEADERS, value_input_option="RAW")
             self._tabs[STATE_TAB] = sheet
             return sheet
-

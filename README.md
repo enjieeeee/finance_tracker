@@ -4,8 +4,8 @@ A Telegram bot for a couple. It records expenses from Gmail alerts into a shared
 
 ## Features
 - **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged.
-- **Query commands**: `/search`, `/total`, `/cards`, `/billing` read the sheet directly.
-- **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus `/reminders`.
+- **Query commands**: `/search`, `/statement`, `/total`, `/cards`, `/billing` read the sheet directly.
+- **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
 
 Free-text messages get a short help reply. Use the commands below.
@@ -85,12 +85,22 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 \
 - After the first deploy, set `WEBHOOK_URL` to the service URL and redeploy. The bot registers its webhook on startup.
 - To check logs: `gcloud run services logs tail finance-agent --region asia-southeast1`.
 
+## Development
+Install [pre-commit](https://pre-commit.com) and enable both hooks once:
+
+```bash
+pre-commit install
+pre-commit install --hook-type pre-push
+```
+
+Every commit runs `ruff check --fix` and `ruff format`. Every push runs `ruff check` and `ruff format --check`, and the push is rejected if either fails. Ruff settings live in `pyproject.toml`.
+
 ## Commands
 - `/start` or `/help`: show usage
 - `/search <keyword> [YYYY-MM-DD..YYYY-MM-DD] [card=<name>] [user=<name>] [category=<name>]`: total, count, and the last 10 matching transactions. Keywords match the merchant name. Quote multi-word values, e.g. `/search "heart beat" card="UOB Card"`.
-- `/total [YYYY-MM]`: totals per category for a month (defaults to the current month).
-- `/cards`: card rules from the `Cards` tab.
+- `/statement [months]`: transactions from the current month to today; with a number N, from N months back (including this month), e.g. `/statement 4` for Jul to Oct.
+- `/total [months]`: total spending for the current month; with a number N, one total per month for the last N months (e.g. `/total 3`).
+- `/cards`: compact card summary (holder, category rules, key exceptions) from the `Cards` tab, duplicate cards merged.
 - `/billing`: billing cycle summary from the `Billing` tab.
 - `/dashboard [YYYY-MM]`: monthly spending charts.
-- `/reminders`: billing cycle summary for all cards.
 - `/clear`: no-op, kept for compatibility (the bot keeps no chat history).

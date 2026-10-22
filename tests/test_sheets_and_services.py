@@ -3,8 +3,19 @@ from datetime import date
 import pytest
 
 from chart_generator import render_dashboard
-from queries import (QueryError, format_billing, format_search, format_totals, parse_month,
-                     parse_search)
+from queries import (
+    TOTAL_USAGE,
+    QueryError,
+    format_billing,
+    format_cards,
+    format_search,
+    format_statement,
+    format_totals,
+    parse_month_count,
+    parse_search,
+    parse_statement_start,
+    recent_months,
+)
 from sheets_service import (
     BillingRule,
     Transaction,
@@ -18,21 +29,45 @@ from sheets_service import (
 
 
 def _txn(day, category, card, amount, user="En Jie", merchant=""):
-    return Transaction(date=day, time="12:00", user=user, category=category, amount=amount,
-                       currency="SGD", card=card, merchant=merchant)
+    return Transaction(
+        date=day,
+        time="12:00",
+        user=user,
+        category=category,
+        amount=amount,
+        currency="SGD",
+        card=card,
+        merchant=merchant,
+    )
 
 
 def test_row_to_transaction_accepts_formatted_amount_and_dd_mm_yyyy_dates():
-    row = {"Date": "05/10/2026", "Time": "12:30", "User": "Jeslin", "Category": "Food",
-           "Amount": "$1,234.50", "Currency": "SGD", "Card": "DBS", "Merchant/Notes": "Lunch"}
+    row = {
+        "Date": "05/10/2026",
+        "Time": "12:30",
+        "User": "Jeslin",
+        "Category": "Food",
+        "Amount": "$1,234.50",
+        "Currency": "SGD",
+        "Card": "DBS",
+        "Merchant/Notes": "Lunch",
+    }
     t = row_to_transaction(row)
     assert t.date == date(2026, 10, 5)
     assert t.amount == 1234.50
 
 
 def test_row_to_transaction_maps_merchant():
-    row = {"Date": "05/10/2026", "Time": "12:30", "User": "Jeslin", "Category": "Dining",
-           "Amount": "12", "Currency": "SGD", "Card": "DBS", "Merchant": "Koufu"}
+    row = {
+        "Date": "05/10/2026",
+        "Time": "12:30",
+        "User": "Jeslin",
+        "Category": "Dining",
+        "Amount": "12",
+        "Currency": "SGD",
+        "Card": "DBS",
+        "Merchant": "Koufu",
+    }
     t = row_to_transaction(row)
     assert t.merchant == "Koufu"
 
@@ -52,27 +87,33 @@ def test_filter_by_date_range_and_merchant_keyword():
 
 
 def test_filter_by_user_and_card_is_case_insensitive():
-    txns = [_txn(date(2026, 10, 1), "Food", "DBS Altitude", 9, user="Jeslin"),
-            _txn(date(2026, 10, 2), "Food", "Citi", 7, user="En Jie")]
+    txns = [
+        _txn(date(2026, 10, 1), "Food", "DBS Altitude", 9, user="Jeslin"),
+        _txn(date(2026, 10, 2), "Food", "Citi", 7, user="En Jie"),
+    ]
     query = TransactionQuery(user="jeslin", card="altitude")
     assert len(filter_transactions(txns, query)) == 1
 
 
 def test_row_to_billing_rejects_invalid_days():
-    assert row_to_billing({"Card": "Citi", "Statement Closing Day": 40, "Payment Due Day": 5}) is None
+    assert (
+        row_to_billing({"Card": "Citi", "Statement Closing Day": 40, "Payment Due Day": 5}) is None
+    )
     assert parse_date("2026-10-05") == date(2026, 10, 5)
 
 
 def test_render_dashboard_returns_png_and_none_when_empty():
     assert render_dashboard([], "October 2026") is None
-    txns = [_txn(date(2026, 10, 1), "Food", "DBS", 15.0),
-            _txn(date(2026, 10, 2), "Transport", "Citi", 12.0)]
+    txns = [
+        _txn(date(2026, 10, 1), "Food", "DBS", 15.0),
+        _txn(date(2026, 10, 2), "Transport", "Citi", 12.0),
+    ]
     png = render_dashboard(txns, "October 2026")
     assert png.startswith(b"\x89PNG")
 
 
 def test_parse_search_splits_range_filters_and_keyword():
-    query = parse_search(["grab", "2026-10-01..2026-10-31", 'card=UOB Card', "user=jeslin"])
+    query = parse_search(["grab", "2026-10-01..2026-10-31", "card=UOB Card", "user=jeslin"])
     assert query.start == date(2026, 10, 1)
     assert query.end == date(2026, 10, 31)
     assert query.merchant == "grab"
@@ -95,23 +136,79 @@ def test_format_search_reports_count_total_and_latest_rows():
     assert format_search(txns, TransactionQuery(merchant="nothing")) == "No matching transactions."
 
 
-def test_parse_month_defaults_to_current_month_and_rejects_bad_input():
-    assert parse_month("", date(2026, 10, 17)) == date(2026, 10, 1)
-    assert parse_month("2026-09", date(2026, 10, 17)) == date(2026, 9, 1)
+def test_statement_start_is_current_month_or_n_months_including_this_one():
+    today = date(2026, 10, 22)
+    assert parse_statement_start("", today) == date(2026, 10, 1)
+    assert parse_statement_start("4", today) == date(2026, 7, 1)
     with pytest.raises(QueryError):
-        parse_month("October", date(2026, 10, 17))
+        parse_statement_start("October", today)
 
 
-def test_format_totals_groups_by_category_for_one_month_only():
-    txns = [_txn(date(2026, 10, 1), "Food", "DBS", 10.0),
-            _txn(date(2026, 10, 2), "Food", "DBS", 5.0),
-            _txn(date(2026, 10, 3), "Transport", "Citi", 4.0),
-            _txn(date(2026, 9, 30), "Food", "DBS", 99.0)]
-    text = format_totals(txns, date(2026, 10, 1))
-    assert "Food: 15.00" in text
-    assert "Transport: 4.00" in text
-    assert "Total: 19.00" in text
+def test_format_statement_covers_start_month_to_today_only():
+    txns = [
+        _txn(date(2026, 6, 30), "Food", "DBS", 99.0),
+        _txn(date(2026, 7, 1), "Food", "DBS", 10.0),
+        _txn(date(2026, 10, 3), "Transport", "Citi", 4.0),
+    ]
+    text = format_statement(txns, date(2026, 7, 1), date(2026, 10, 22))
+    assert text.startswith("Statement Jul 2026 to 22 Oct 2026: 2 transaction(s), total 14.00")
     assert "99" not in text
+
+
+def test_month_count_defaults_to_one_and_is_bounded():
+    assert parse_month_count("", TOTAL_USAGE) == 1
+    assert parse_month_count("3", TOTAL_USAGE) == 3
+    for bad in ("0", "25", "2026-10", "abc"):
+        with pytest.raises(QueryError):
+            parse_month_count(bad, TOTAL_USAGE)
+
+
+def test_recent_months_crosses_year_boundary_oldest_first():
+    assert recent_months(date(2026, 2, 10), 3) == [
+        date(2025, 12, 1),
+        date(2026, 1, 1),
+        date(2026, 2, 1),
+    ]
+
+
+def test_format_totals_single_month_is_one_total_and_multi_month_is_per_month():
+    txns = [
+        _txn(date(2026, 10, 1), "Food", "DBS", 10.0),
+        _txn(date(2026, 10, 3), "Transport", "Citi", 4.0),
+        _txn(date(2026, 9, 30), "Food", "DBS", 99.0),
+    ]
+    assert format_totals(txns, [date(2026, 10, 1)]) == "Total for October 2026: 14.00"
+    assert format_totals(txns, [date(2026, 9, 1), date(2026, 10, 1)]) == (
+        "Sep 2026: 99.00\nOct 2026: 14.00"
+    )
+
+
+def test_format_cards_merges_duplicate_rows_and_keeps_each_holder():
+    rows = [
+        {
+            "Card Holder": "En Jie",
+            "Card": "UOB Lady's Card",
+            "Category Rules": "Dining 4%",
+            "Key Exceptions & Traps to Avoid": "Min spend",
+        },
+        {
+            "Card Holder": "Jeslin",
+            "Card": "UOB Lady's Card",
+            "Category Rules": "Transport 2%",
+            "Key Exceptions & Traps to Avoid": "",
+        },
+        {
+            "Card Holder": "En Jie",
+            "Card": "UOB Lady's Card",
+            "Category Rules": "Dining 4%",
+            "Key Exceptions & Traps to Avoid": "Min spend",
+        },
+    ]
+    text = format_cards(rows)
+    assert text.count("UOB Lady's Card") == 1
+    assert "(En Jie, Jeslin)" in text
+    assert text.count("Dining 4%") == 1
+    assert text.count("Min spend") == 1
 
 
 def test_format_billing_lists_each_rule():

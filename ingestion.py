@@ -4,9 +4,17 @@ from datetime import datetime
 from googleapiclient.errors import HttpError
 
 from config import Settings
-from gmail_service import (CardAlert, EmailMessage, GmailClient, is_relevant,
-                           parse_card_alert, parse_paynow_amount, parse_paynow_recipient,
-                           parse_qr_payment, parse_transit_charge)
+from gmail_service import (
+    CardAlert,
+    EmailMessage,
+    GmailClient,
+    is_relevant,
+    parse_card_alert,
+    parse_paynow_amount,
+    parse_paynow_recipient,
+    parse_qr_payment,
+    parse_transit_charge,
+)
 from sheets_service import SheetsService, Transaction
 
 logger = logging.getLogger(__name__)
@@ -25,9 +33,14 @@ def is_gmail_rate_limited(exc: HttpError) -> bool:
     return exc.resp.status == 403 and b"rateLimitExceeded" in (exc.content or b"")
 
 
-def build_paynow_transaction(email: EmailMessage, amount: float, settings: Settings,
-                             now: datetime, merchant: str = "",
-                             category: str = PAYNOW_CATEGORY) -> Transaction:
+def build_paynow_transaction(
+    email: EmailMessage,
+    amount: float,
+    settings: Settings,
+    now: datetime,
+    merchant: str = "",
+    category: str = PAYNOW_CATEGORY,
+) -> Transaction:
     when = email.sent_at.astimezone(settings.tz) if email.sent_at else now
     return Transaction(
         date=when.date(),
@@ -43,15 +56,16 @@ def build_paynow_transaction(email: EmailMessage, amount: float, settings: Setti
     )
 
 
-def build_card_transaction(email: EmailMessage, alert: CardAlert, card: str,
-                           settings: Settings, now: datetime) -> Transaction:
+def build_card_transaction(
+    email: EmailMessage, alert: CardAlert, card: str, settings: Settings, now: datetime
+) -> Transaction:
     when = email.sent_at.astimezone(settings.tz) if email.sent_at else now
     return Transaction(
         date=alert.day,
         time=when.strftime("%H:%M"),
         user=settings.gmail_owner_name,
         category=alert.category or FALLBACK_CATEGORY,
-
+        amount=alert.amount,
         currency=PAYNOW_CURRENCY,
         card=card,
         merchant=alert.merchant,
@@ -60,8 +74,13 @@ def build_card_transaction(email: EmailMessage, alert: CardAlert, card: str,
     )
 
 
-def sync_gmail(gmail: GmailClient, sheets: SheetsService,
-               settings: Settings, push_history_id: str, now: datetime) -> list[Transaction]:
+def sync_gmail(
+    gmail: GmailClient,
+    sheets: SheetsService,
+    settings: Settings,
+    push_history_id: str,
+    now: datetime,
+) -> list[Transaction]:
     """Log outgoing PayNow transfers since the last stored historyId. Safe to retry."""
     start = sheets.load_state(GMAIL_HISTORY_KEY)
     if not start:
@@ -73,11 +92,14 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService,
         message_ids, latest = gmail.new_message_ids(start)
     except HttpError as exc:
         if exc.resp.status == 404:
-            logger.warning("Stored historyId %s is too old; resetting to %s", start, push_history_id)
+            logger.warning(
+                "Stored historyId %s is too old; resetting to %s", start, push_history_id
+            )
             sheets.save_state(GMAIL_HISTORY_KEY, push_history_id)
             return []
         if is_gmail_rate_limited(exc):
-            # Keep the baseline so the next push retries these messages; a 500 would make Pub/Sub retry and worsen the quota.
+            # Keep the baseline so the next push retries these messages;
+            # a 500 would make Pub/Sub retry and worsen the quota.
             logger.warning("Gmail quota exceeded; skipping push, baseline %s kept", start)
             return []
         raise
@@ -95,12 +117,15 @@ def sync_gmail(gmail: GmailClient, sheets: SheetsService,
             txn = build_paynow_transaction(email, amount, settings, now, merchant=recipient)
         elif qr is not None:
             qr_amount, payee = qr
-            txn = build_paynow_transaction(email, qr_amount, settings, now, merchant=payee,
-                                           category=FALLBACK_CATEGORY)
+            txn = build_paynow_transaction(
+                email, qr_amount, settings, now, merchant=payee, category=FALLBACK_CATEGORY
+            )
         else:
             alert = parse_card_alert(email.body) or parse_transit_charge(email.body)
             if alert is None:
-                logger.info("Gmail message %s is not a known transaction format; skipping", message_id)
+                logger.info(
+                    "Gmail message %s is not a known transaction format; skipping", message_id
+                )
                 continue
             card = sheets.load_card_names_by_ending().get(alert.ending, alert.card)
             txn = build_card_transaction(email, alert, card, settings, now)

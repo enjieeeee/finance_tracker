@@ -22,8 +22,21 @@ from chart_generator import render_dashboard
 from config import Settings, load_settings
 from gmail_service import GmailClient, decode_push_history_id
 from ingestion import sync_gmail
-from queries import (SEARCH_USAGE, QueryError, format_billing, format_search, format_totals,
-                     parse_month, parse_search)
+from queries import (
+    SEARCH_USAGE,
+    STATEMENT_USAGE,
+    TOTAL_USAGE,
+    QueryError,
+    format_billing,
+    format_cards,
+    format_search,
+    format_statement,
+    format_totals,
+    parse_month_count,
+    parse_search,
+    parse_statement_start,
+    recent_months,
+)
 from reminders import billing_summary, due_reminders
 from sheets_service import SheetsService, Transaction
 
@@ -36,14 +49,15 @@ WEBHOOK_PATH = "/telegram/webhook"
 TELEGRAM_MAX_CHARS = 4096
 GMAIL_WEBHOOK_PATH = "/webhook/gmail"
 HELP_TEXT = (
-    "Transactions are logged automatically from Gmail (PayNow and card alerts).\n\n"
+    "Transactions are logged automatically from Gmail (PayNow, QR, card and transit alerts).\n\n"
     "Commands:\n"
-    "/search <keyword> [YYYY-MM-DD..YYYY-MM-DD] [card=\"...\"] [user=...] [category=...] - find transactions\n"
-    "/total [YYYY-MM] - spending by category for a month\n"
+    '/search <keyword> [YYYY-MM-DD..YYYY-MM-DD] [card="..."] [user=...] [category=...]'
+    " - find transactions\n"
+    "/statement [months] - transactions for this month, or from N months back to now\n"
+    "/total [months] - spending for this month, or per month for the last N months\n"
     "/dashboard [YYYY-MM] - spending charts for a month\n"
-    "/cards - card rules and benefits\n"
+    "/cards - card rules and exceptions\n"
     "/billing - statement closing and due days\n"
-    "/reminders - upcoming card closing and due dates\n"
     "/help - this list\n"
     "/clear - nothing to clear (no chat memory)"
 )
@@ -71,12 +85,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @allowed_only
 async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text("Nothing to clear. Commands don't keep a conversation.")
+    await update.effective_message.reply_text(
+        "Nothing to clear. Commands don't keep a conversation."
+    )
 
 
 @allowed_only
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text("Free-text chat is off. Send /help to see the commands.")
+    await update.effective_message.reply_text(
+        "Free-text chat is off. Send /help to see the commands."
+    )
 
 
 def _command_args(message_text: str) -> list[str]:
@@ -91,7 +109,23 @@ def _command_args(message_text: str) -> list[str]:
 
 
 async def _reply(message, text: str) -> None:
-    await message.reply_text(text[:TELEGRAM_MAX_CHARS])
+    for chunk in split_message(text):
+        await message.reply_text(chunk)
+
+
+def split_message(text: str, limit: int = TELEGRAM_MAX_CHARS) -> list[str]:
+    """Split on line breaks so each chunk fits Telegram's message limit."""
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    chunks.append(current)
+    return chunks
 
 
 @allowed_only
@@ -111,25 +145,46 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 @allowed_only
+async def statement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.bot_data["settings"]
+    sheets: SheetsService = context.bot_data["sheets"]
+    message = update.effective_message
+    try:
+        args = _command_args(message.text)
+        if len(args) > 1:
+            raise QueryError(STATEMENT_USAGE)
+        today = datetime.now(settings.tz).date()
+        start = parse_statement_start(args[0] if args else "", today)
+    except QueryError as exc:
+        await message.reply_text(str(exc))
+        return
+    transactions = await asyncio.to_thread(sheets.load_transactions)
+    await _reply(message, format_statement(transactions, start, today))
+
+
+@allowed_only
 async def total_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
     message = update.effective_message
     try:
         args = _command_args(message.text)
-        month = parse_month(args[0] if args else "", datetime.now(settings.tz).date())
+        if len(args) > 1:
+            raise QueryError(TOTAL_USAGE)
+        count = parse_month_count(args[0] if args else "", TOTAL_USAGE)
     except QueryError as exc:
         await message.reply_text(str(exc))
         return
+    months = recent_months(datetime.now(settings.tz).date(), count)
     transactions = await asyncio.to_thread(sheets.load_transactions)
-    await _reply(message, format_totals(transactions, month))
+    await _reply(message, format_totals(transactions, months))
 
 
 @allowed_only
 async def cards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     sheets: SheetsService = context.bot_data["sheets"]
-    text = await asyncio.to_thread(sheets.load_cards_text)
-    await _reply(update.effective_message, text or "No cards found.")
+    rows = await asyncio.to_thread(sheets.load_cards_rows)
+    await _reply(update.effective_message, format_cards(rows))
 
 
 @allowed_only
@@ -140,8 +195,10 @@ async def billing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 def _format_saved(txn: Transaction) -> str:
-    return (f"{txn.date:%d %b %Y} {txn.time} |{txn.card}  "
-            f"{txn.currency} {txn.amount:,.2f}| {txn.merchant}")
+    return (
+        f"{txn.date:%d %b %Y} {txn.time} |{txn.card}  "
+        f"{txn.currency} {txn.amount:,.2f}| {txn.merchant}"
+    )
 
 
 async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
@@ -174,15 +231,6 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_photo(photo=png, caption=f"Spending for {label}")
 
 
-@allowed_only
-async def reminders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.bot_data["settings"]
-    sheets: SheetsService = context.bot_data["sheets"]
-    rules = await asyncio.to_thread(sheets.load_billing)
-    await update.effective_message.reply_text(
-        billing_summary(rules, datetime.now(settings.tz).date()))
-
-
 async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
@@ -203,19 +251,24 @@ def build_application(settings: Settings) -> Application:
     application.bot_data.update(
         settings=settings,
         sheets=sheets,
-        gmail=(GmailClient(settings.gmail_client_id, settings.gmail_client_secret,
-                           settings.gmail_refresh_token) if settings.gmail_enabled else None),
+        gmail=(
+            GmailClient(
+                settings.gmail_client_id, settings.gmail_client_secret, settings.gmail_refresh_token
+            )
+            if settings.gmail_enabled
+            else None
+        ),
         gmail_lock=asyncio.Lock(),
     )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
     application.add_handler(CommandHandler("clear", clear_chat))
     application.add_handler(CommandHandler("search", search_command))
+    application.add_handler(CommandHandler("statement", statement_command))
     application.add_handler(CommandHandler("total", total_command))
     application.add_handler(CommandHandler("cards", cards_command))
     application.add_handler(CommandHandler("billing", billing_command))
     application.add_handler(CommandHandler("dashboard", dashboard))
-    application.add_handler(CommandHandler("reminders", reminders_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.job_queue.run_daily(
         send_daily_reminders,
@@ -271,7 +324,8 @@ def create_app() -> FastAPI:
     @api.post(GMAIL_WEBHOOK_PATH)
     async def gmail_webhook(request: Request):
         if not settings.gmail_push_token or not hmac.compare_digest(
-                request.query_params.get("token", ""), settings.gmail_push_token):
+            request.query_params.get("token", ""), settings.gmail_push_token
+        ):
             raise HTTPException(status_code=403, detail="Invalid push token")
         gmail: GmailClient | None = telegram_app.bot_data["gmail"]
         if gmail is None:
@@ -281,11 +335,12 @@ def create_app() -> FastAPI:
         now = datetime.now(settings.tz)
         async with telegram_app.bot_data["gmail_lock"]:
             logged = await asyncio.to_thread(
-                sync_gmail, gmail, telegram_app.bot_data["sheets"],
-                settings, push_history_id, now)
+                sync_gmail, gmail, telegram_app.bot_data["sheets"], settings, push_history_id, now
+            )
         for txn in logged:
-            await _notify_allowed_users(telegram_app.bot, settings,
-                                        f"📧 Transaction logged: {_format_saved(txn)}")
+            await _notify_allowed_users(
+                telegram_app.bot, settings, f"📧 Transaction logged: {_format_saved(txn)}"
+            )
         return {"ok": True, "logged": len(logged)}
 
     @api.get("/health")
