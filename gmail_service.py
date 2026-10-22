@@ -28,6 +28,14 @@ PAYNOW_RECIPIENT = re.compile(
 CARD_ALERT = re.compile(
     r"A transaction of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) was made with your (.+?) ending (\d{4}) "
     r"on (\d{2}/\d{2}/\d{2}) at (.+?)\.(?:\s|$)", re.IGNORECASE)
+QR_OUTGOING = re.compile(
+    r"You made a NETS QR payment of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) to (.+?) on your a/c ending",
+    re.IGNORECASE)
+TRANSIT_CHARGE = re.compile(
+    r"accumulated transit transactions of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) has been billed to your "
+    r"(.+?) ending (\d{4}) on (\d{2}/\d{2}/\d{2})", re.IGNORECASE)
+TRANSIT_MERCHANT = "SMRT CORPORATION LTD"
+TRANSIT_CATEGORY = "transport"
 MAX_BODY_CHARS = 4000
 
 
@@ -47,6 +55,7 @@ class CardAlert:
     ending: str
     merchant: str
     day: date
+    category: str = ""
 
 
 def decode_push_history_id(push_body: dict) -> str:
@@ -71,6 +80,14 @@ def parse_paynow_recipient(body: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def parse_qr_payment(body: str) -> tuple[float, str] | None:
+    """(amount, payee) of an outgoing NETS QR payment, or None for any other email."""
+    match = QR_OUTGOING.search(body)
+    if not match:
+        return None
+    return float(match.group(1).replace(",", "")), match.group(2).strip()
+
+
 def parse_card_alert(body: str) -> CardAlert | None:
     """Card transaction from a UOB card alert, or None for any other email."""
     match = CARD_ALERT.search(body)
@@ -81,6 +98,21 @@ def parse_card_alert(body: str) -> CardAlert | None:
         card=f"{match.group(2).strip()} ending {match.group(3)}",
         ending=match.group(3),
         merchant=match.group(5).strip(),
+        day=datetime.strptime(match.group(4), "%d/%m/%y").date(),
+    )
+
+
+def parse_transit_charge(body: str) -> CardAlert | None:
+    """Billed transit charges on a UOB card, or None for any other email."""
+    match = TRANSIT_CHARGE.search(body)
+    if not match:
+        return None
+    return CardAlert(
+        amount=float(match.group(1).replace(",", "")),
+        card=f"{match.group(2).strip()} ending {match.group(3)}",
+        ending=match.group(3),
+        merchant=TRANSIT_MERCHANT,
+        category=TRANSIT_CATEGORY,
         day=datetime.strptime(match.group(4), "%d/%m/%y").date(),
     )
 

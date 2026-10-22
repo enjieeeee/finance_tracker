@@ -9,7 +9,8 @@ from googleapiclient.errors import HttpError
 
 from config import Settings
 from gmail_service import (EmailMessage, decode_push_history_id, extract_body, is_relevant,
-                           parse_card_alert, parse_paynow_amount, parse_paynow_recipient)
+                           parse_card_alert, parse_paynow_amount, parse_paynow_recipient,
+                           parse_qr_payment)
 from ingestion import GMAIL_HISTORY_KEY, sync_gmail
 from sheets_service import Transaction
 
@@ -257,3 +258,34 @@ def test_uob_paynow_inbound_template_is_not_logged():
                       messages={"m1": email("m1", template["subject"], template["raw_content"])})
     assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
     assert sheets.transactions == []
+
+
+def test_uob_qr_payment_template_is_logged_as_bank_transfer():
+    template = load_reference("QRpayment_outboundtransfer.json")
+    assert is_relevant(template["subject"], template["raw_content"])
+    assert parse_qr_payment(template["raw_content"]) == (5.0, "HUA DEE-BEDOK")
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"], template["raw_content"])})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert len(logged) == 1
+    assert logged[0].amount == 5.0
+    assert logged[0].category == "Others"
+    assert logged[0].card == "No Card/Bank Transfer"
+    assert logged[0].merchant == "HUA DEE-BEDOK"
+
+
+def test_uob_transit_template_is_logged_on_card_with_billing_date():
+    template = load_reference("schedulepayment_outboundtransfer.json")
+    assert is_relevant(template["subject"] or "", template["raw_content"])
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"}, card_names={"2881": "UOB Lady's Card"})
+    gmail = FakeGmail(ids=["m1"], latest="200",
+                      messages={"m1": email("m1", template["subject"] or "", template["raw_content"])})
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert len(logged) == 1
+    assert logged[0].amount == 16.79
+    assert logged[0].card == "UOB Lady's Card"
+    assert logged[0].merchant == "SMRT CORPORATION LTD"
+    assert logged[0].category == "transport"
+    assert logged[0].date == date(2026, 10, 13)
+
