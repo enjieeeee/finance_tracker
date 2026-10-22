@@ -65,7 +65,6 @@ def build_card_transaction(
         time=when.strftime("%H:%M"),
         user=settings.gmail_owner_name,
         category=alert.category or FALLBACK_CATEGORY,
-        amount=alert.amount,
         currency=PAYNOW_CURRENCY,
         card=card,
         merchant=alert.merchant,
@@ -98,8 +97,6 @@ def sync_gmail(
             sheets.save_state(GMAIL_HISTORY_KEY, push_history_id)
             return []
         if is_gmail_rate_limited(exc):
-            # Keep the baseline so the next push retries these messages;
-            # a 500 would make Pub/Sub retry and worsen the quota.
             logger.warning("Gmail quota exceeded; skipping push, baseline %s kept", start)
             return []
         raise
