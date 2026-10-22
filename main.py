@@ -18,11 +18,11 @@ from telegram.ext import (
     filters,
 )
 
+from assistant import Assistant
 from chart_generator import render_dashboard
 from config import Settings, load_settings
 from gmail_service import GmailClient, decode_push_history_id
 from ingestion import sync_gmail
-from nl_compiler import compile_command
 from queries import (
     SEARCH_USAGE,
     STATEMENT_USAGE,
@@ -95,25 +95,13 @@ async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     message = update.effective_message
-    if not settings.groq_api_key:
+    assistant: Assistant | None = context.bot_data["assistant"]
+    if assistant is None:
         await message.reply_text("Free-text chat is off. Send /help to see the commands.")
         return
-    compiled = await compile_command(
-        message.text,
-        datetime.now(settings.tz).date(),
-        settings.groq_api_key,
-        settings.groq_model,
-    )
-    if compiled is None:
-        await message.reply_text(
-            "I couldn't turn that into a command. Send /help to see the options."
-        )
-        return
-    if compiled.command == "help":
-        await _reply(message, HELP_TEXT)
-        return
-    await message.reply_text(f"Running: {shlex.join(['/' + compiled.command, *compiled.args])}")
-    await FREE_TEXT_RUNNERS[compiled.command](message, context, compiled.args)
+    await context.bot.send_chat_action(chat_id=message.chat_id, action="typing")
+    reply = await assistant.answer(message.text, datetime.now(settings.tz).date())
+    await _reply(message, reply)
 
 
 def _command_args(message_text: str) -> list[str]:
@@ -262,15 +250,6 @@ cards_command = _command_handler(run_cards)
 billing_command = _command_handler(run_billing)
 dashboard_command = _command_handler(run_dashboard)
 
-FREE_TEXT_RUNNERS = {
-    "search": run_search,
-    "statement": run_statement,
-    "total": run_total,
-    "cards": run_cards,
-    "billing": run_billing,
-    "dashboard": run_dashboard,
-}
-
 
 async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
@@ -300,6 +279,11 @@ def build_application(settings: Settings) -> Application:
             else None
         ),
         gmail_lock=asyncio.Lock(),
+        assistant=(
+            Assistant(sheets, settings.groq_api_key, settings.groq_model)
+            if settings.groq_api_key
+            else None
+        ),
     )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
