@@ -269,9 +269,7 @@ async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     if today.day == 1:
         messages.insert(0, billing_summary(rules, today))
     if settings.gmail_enabled:
-        refreshed_at_value = await asyncio.to_thread(
-            sheets.load_state, GMAIL_TOKEN_REFRESHED_KEY
-        )
+        refreshed_at_value = await asyncio.to_thread(sheets.load_state, GMAIL_TOKEN_REFRESHED_KEY)
         refreshed_at = date.fromisoformat(refreshed_at_value) if refreshed_at_value else None
         token_message = gmail_token_reminder(refreshed_at, today)
         if token_message:
@@ -285,9 +283,7 @@ async def gmail_refreshed(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
     refreshed_at = datetime.now(settings.tz).date()
-    await asyncio.to_thread(
-        sheets.save_state, GMAIL_TOKEN_REFRESHED_KEY, refreshed_at.isoformat()
-    )
+    await asyncio.to_thread(sheets.save_state, GMAIL_TOKEN_REFRESHED_KEY, refreshed_at.isoformat())
     reminder_date = refreshed_at + timedelta(days=GMAIL_TOKEN_VALIDITY_DAYS - 1)
     expiry_date = refreshed_at + timedelta(days=GMAIL_TOKEN_VALIDITY_DAYS)
     message = (

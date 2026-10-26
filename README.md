@@ -109,6 +109,14 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 `
   ```
 
 ## Development
+Start an interactive terminal session with the finance assistant (uses the Google Sheet and Groq settings from `.env`):
+
+```powershell
+.\.venv\Scripts\python.exe dev_console.py
+```
+
+Type a question at `You>` and enter `/exit` to quit. Each question is handled independently; the console does not retain chat history.
+
 Install [pre-commit](https://pre-commit.com) and enable both hooks once:
 
 ```bash
