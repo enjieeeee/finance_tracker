@@ -5,7 +5,7 @@ import logging
 import os
 import shlex
 from contextlib import asynccontextmanager
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 
 from fastapi import FastAPI, HTTPException, Request
 from telegram import Update
@@ -38,7 +38,12 @@ from queries import (
     parse_statement_start,
     recent_months,
 )
-from reminders import billing_summary, due_reminders
+from reminders import (
+    GMAIL_TOKEN_VALIDITY_DAYS,
+    billing_summary,
+    due_reminders,
+    gmail_token_reminder,
+)
 from sheets_service import SheetsService, Transaction
 
 logger = logging.getLogger(__name__)
@@ -49,6 +54,7 @@ logging.basicConfig(
 WEBHOOK_PATH = "/telegram/webhook"
 TELEGRAM_MAX_CHARS = 4096
 GMAIL_WEBHOOK_PATH = "/webhook/gmail"
+GMAIL_TOKEN_REFRESHED_KEY = "gmail_token_refreshed_at"
 HELP_TEXT = (
     "Transactions are logged automatically from Gmail (PayNow, QR, card and transit alerts).\n\n"
     "Commands:\n"
@@ -59,6 +65,7 @@ HELP_TEXT = (
     "/dashboard [YYYY-MM] - spending charts for a month\n"
     "/cards - card rules and exceptions\n"
     "/billing - statement closing and due days\n"
+    "/gmailrefreshed - record that the Gmail refresh token was refreshed today\n"
     "/help - this list\n"
     "/clear - nothing to clear (no chat memory)"
 )
@@ -261,8 +268,36 @@ async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     messages = due_reminders(rules, today)
     if today.day == 1:
         messages.insert(0, billing_summary(rules, today))
+    if settings.gmail_enabled:
+        refreshed_at_value = await asyncio.to_thread(
+            sheets.load_state, GMAIL_TOKEN_REFRESHED_KEY
+        )
+        refreshed_at = date.fromisoformat(refreshed_at_value) if refreshed_at_value else None
+        token_message = gmail_token_reminder(refreshed_at, today)
+        if token_message:
+            messages.insert(0, token_message)
     for text in messages:
         await context.bot.send_message(chat_id=settings.reminder_chat_id, text=text)
+
+
+@allowed_only
+async def gmail_refreshed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.bot_data["settings"]
+    sheets: SheetsService = context.bot_data["sheets"]
+    refreshed_at = datetime.now(settings.tz).date()
+    await asyncio.to_thread(
+        sheets.save_state, GMAIL_TOKEN_REFRESHED_KEY, refreshed_at.isoformat()
+    )
+    reminder_date = refreshed_at + timedelta(days=GMAIL_TOKEN_VALIDITY_DAYS - 1)
+    expiry_date = refreshed_at + timedelta(days=GMAIL_TOKEN_VALIDITY_DAYS)
+    message = (
+        f"Recorded Gmail token refresh for {refreshed_at:%d %b %Y}. "
+        f"I'll remind you on {reminder_date:%d %b %Y}, one day before the assumed "
+        f"expiry on {expiry_date:%d %b %Y}."
+    )
+    if settings.reminder_chat_id is None:
+        message += " Set REMINDER_CHAT_ID to receive scheduled reminders."
+    await update.effective_message.reply_text(message)
 
 
 def build_application(settings: Settings) -> Application:
@@ -294,6 +329,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("cards", cards_command))
     application.add_handler(CommandHandler("billing", billing_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
+    application.add_handler(CommandHandler("gmailrefreshed", gmail_refreshed))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.job_queue.run_daily(
         send_daily_reminders,

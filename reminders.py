@@ -4,6 +4,20 @@ from datetime import date, timedelta
 from sheets_service import BillingRule
 
 REMINDER_WINDOWS = (7, 3, 1, 0)
+GMAIL_TOKEN_VALIDITY_DAYS = 7
+
+
+def gmail_token_reminder(refreshed_at: date | None, today: date) -> str | None:
+    """Return the one-day warning for a token assumed to expire after seven days."""
+    if refreshed_at is None:
+        return None
+    expires_at = refreshed_at + timedelta(days=GMAIL_TOKEN_VALIDITY_DAYS)
+    if today != expires_at - timedelta(days=1):
+        return None
+    return (
+        "⚠️ Your Gmail refresh token is expected to expire tomorrow "
+        f"({expires_at:%d %b %Y}). Refresh it, then send /gmailrefreshed to reset this reminder."
+    )
 
 
 def _date_in_month(year: int, month: int, day: int) -> date:

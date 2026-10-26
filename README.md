@@ -5,7 +5,7 @@ A Telegram bot for a couple. It records expenses from Gmail alerts into a shared
 ## Features
 - **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged.
 - **Query commands**: `/search`, `/statement`, `/total`, `/cards`, `/billing` read the sheet directly.
-- **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab.
+- **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus a Gmail token reminder one day before its assumed 7-day expiry.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
 
 Free-text messages go to a Groq LLM (`GROQ_API_KEY`) that can call read-only finance tools: searching transactions, monthly totals, cards and billing. The tools query the same sheet as the slash commands, and the model answers only from their results. Without `GROQ_API_KEY`, free text gets a short help reply.
@@ -72,20 +72,41 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 \
   --set-env-vars "TELEGRAM_BOT_TOKEN=...,TELEGRAM_WEBHOOK_SECRET=...,WEBHOOK_URL=https://<service-url>,ALLOWED_USER_IDS=...,REMINDER_CHAT_ID=...,GOOGLE_SHEET_ID=...,GOOGLE_SERVICE_ACCOUNT_JSON=<paste JSON>"
 ```
 
+PowerShell:
+```powershell
+gcloud run deploy finance-agent --source . --region asia-southeast1 `
+  --allow-unauthenticated --min-instances 1 `
+  --set-env-vars "TELEGRAM_BOT_TOKEN=...,TELEGRAM_WEBHOOK_SECRET=...,WEBHOOK_URL=https://<service-url>,ALLOWED_USER_IDS=...,REMINDER_CHAT_ID=...,GOOGLE_SHEET_ID=...,GOOGLE_SERVICE_ACCOUNT_JSON=<paste JSON>"
+```
+
 Option B: keep the variables in `env.yaml` and deploy with `--env-vars-file`. Create the file in the project root with one `KEY: "value"` per line (quote every value, so tokens and JSON parse correctly), then run:
 ```bash
 gcloud run deploy finance-agent --source . --region asia-southeast1 \
   --allow-unauthenticated --min-instances 1 \
   --env-vars-file env.yaml
 ```
+PowerShell:
+gcloud run deploy finance-agent --source . --region asia-southeast1 `
+  --allow-unauthenticated --min-instances 1 `
+  --env-vars-file env.yaml
+```
+
 - `env.yaml` is git-ignored. Do not commit it.
 - Option B keeps secrets out of your shell history.
 - To change one variable without redeploying, use `gcloud run services update finance-agent --region asia-southeast1 --update-env-vars KEY=value`.
+- PowerShell equivalent:
+  ```powershell
+  gcloud run services update finance-agent --region asia-southeast1 --update-env-vars "KEY=value"
+  ```
 
 - Use `--set-secrets` with Secret Manager for the token and keys in production.
 - `--min-instances 1` keeps the built-in reminder scheduler running. It is not free-tier, so review the cost.
 - After the first deploy, set `WEBHOOK_URL` to the service URL and redeploy. The bot registers its webhook on startup.
 - To check logs: `gcloud run services logs tail finance-agent --region asia-southeast1`.
+- PowerShell equivalent:
+  ```powershell
+  gcloud run services logs tail finance-agent --region asia-southeast1
+  ```
 
 ## Development
 Install [pre-commit](https://pre-commit.com) and enable both hooks once:
@@ -105,4 +126,7 @@ Every commit runs `ruff check --fix` and `ruff format`. Every push runs `ruff ch
 - `/cards`: compact card summary (holder, category rules, key exceptions) from the `Cards` tab, duplicate cards merged.
 - `/billing`: billing cycle summary from the `Billing` tab.
 - `/dashboard [YYYY-MM]`: monthly spending charts.
+- `/gmailrefreshed`: record that the Gmail refresh token was refreshed today; the bot reminds the configured reminder chat six days later.
 - `/clear`: no-op, kept for compatibility (the bot keeps no chat history).
+
+The Gmail reminder date is stored in the spreadsheet's `State` tab. After deploying this feature, send `/gmailrefreshed` today to record your recent token refresh; repeat it whenever you refresh the token. This reminder assumes your Google OAuth setup uses a 7-day refresh-token lifetime (for example, an OAuth consent screen in Testing); refresh-token expiry depends on Google's OAuth settings and can also happen for other reasons.
