@@ -8,7 +8,7 @@ A Telegram bot for a couple. It records expenses from Gmail alerts into a shared
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
 
-Free-text messages are turned into commands by Groq (`GROQ_API_KEY`). The LLM only picks a command and its arguments; the bot runs them through the same validated code as the slash commands, so it never answers from its own knowledge. The bot echoes the command it ran (e.g. `Running: /total 2`). Without `GROQ_API_KEY`, free text gets a short help reply.
+Free-text messages go to a Groq LLM (`GROQ_API_KEY`) that can call read-only finance tools: searching transactions, monthly totals, cards and billing. The tools query the same sheet as the slash commands, and the model answers only from their results. Without `GROQ_API_KEY`, free text gets a short help reply.
 
 ## 1. Google Sheet
 Create a spreadsheet with three tabs and these headers in row 1:
