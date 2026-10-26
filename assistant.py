@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Callable
 
 import httpx
@@ -156,9 +156,16 @@ TOOL_SPECS = [
 
 
 def _system_prompt(today: date) -> str:
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
     return (
         "You are a personal finance assistant for a couple, replying on Telegram.\n"
-        f"Today is {today:%A %d %B %Y}. Resolve relative dates such as 'last week' from today.\n\n"
+        f"Today in the configured timezone is {today:%A, %Y-%m-%d}. "
+        "This date is authoritative; do not use a date from your training or prior knowledge.\n"
+        "Calendar weeks run Monday through Sunday. "
+        f"This week is {week_start:%A, %Y-%m-%d} through {week_end:%A, %Y-%m-%d}. "
+        "Resolve relative dates from these dates and use exact YYYY-MM-DD ranges in tools. "
+        "Do not invent weekday names for other dates; omit weekday names unless certain.\n\n"
         "Rules:\n"
         "- Answer questions about spending, cards and billing only by calling the tools. "
         "Never guess figures.\n"

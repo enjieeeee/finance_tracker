@@ -4,10 +4,18 @@ from datetime import date
 
 import httpx
 
-from assistant import FALLBACK_REPLY, MAX_TOOL_ROUNDS, Assistant
+from assistant import FALLBACK_REPLY, MAX_TOOL_ROUNDS, Assistant, _system_prompt
 from sheets_service import Transaction
 
 TODAY = date(2026, 4, 15)
+
+
+def test_system_prompt_gives_authoritative_date_and_calendar_week():
+    prompt = _system_prompt(date(2026, 10, 26))
+
+    assert "Monday, 2026-10-26" in prompt
+    assert "Monday, 2026-10-26 through Sunday, 2026-11-01" in prompt
+    assert "Do not invent weekday names" in prompt
 
 
 class FakeSheets:
