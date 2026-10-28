@@ -199,6 +199,9 @@ class SheetsService:
     def update_transaction_category(self, row_number: int, category: str) -> None:
         self._tab(TRANSACTIONS_TAB).update_cell(row_number, CATEGORY_COLUMN, category)
 
+    def delete_transaction(self, row_number: int) -> None:
+        self._tab(TRANSACTIONS_TAB).delete_rows(row_number)
+
     def append_transaction(self, t: Transaction) -> None:
         self._tab(TRANSACTIONS_TAB).append_row(
             [

@@ -3,7 +3,7 @@
 A Telegram bot for a couple. It records expenses from Gmail alerts into a shared Google Sheet, answers history queries with slash commands, recommends credit cards, sends billing reminders, and draws monthly spending charts. It makes no paid LLM API calls.
 
 ## Features
-- **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged. Card and NETS QR transactions are categorised by merchant: keyword rules in `categorizer.py` first, then a Groq LLM call (`GROQ_API_KEY`) for unmatched merchants, falling back to `Others`. PayNow transfers always stay `PAYNOW`.
+- **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. When UOB sends a "Your transaction has been reversed" email, the matching logged card row (same amount, date, merchant and card) is deleted instead, so reversed or held payments do not stay in the sheet. Unrecognised emails are skipped and logged. Card and NETS QR transactions are categorised by merchant: keyword rules in `categorizer.py` first, then a Groq LLM call (`GROQ_API_KEY`) for unmatched merchants, falling back to `Others`. PayNow transfers always stay `PAYNOW`.
 - **Query commands**: `/search`, `/statement`, `/total`, `/cards`, `/billing` read the sheet directly.
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus a Gmail token reminder one day before its assumed 7-day expiry.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.

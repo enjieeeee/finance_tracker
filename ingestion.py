@@ -7,10 +7,12 @@ from categorizer import FALLBACK_CATEGORY, categorize_merchant
 from config import Settings
 from gmail_service import (
     CardAlert,
+    CardReversal,
     EmailMessage,
     GmailClient,
     is_relevant,
     parse_card_alert,
+    parse_card_reversal,
     parse_paynow_amount,
     parse_paynow_recipient,
     parse_qr_payment,
@@ -127,6 +129,10 @@ def sync_gmail(
                 category=categorize_merchant(payee, settings.groq_api_key, settings.groq_model),
             )
         else:
+            reversal = parse_card_reversal(email.body)
+            if reversal is not None:
+                reverse_card_transaction(sheets, reversal, email.id)
+                continue
             alert = parse_card_alert(email.body) or parse_transit_charge(email.body)
             if alert is None:
                 logger.info(
@@ -143,6 +149,35 @@ def sync_gmail(
 
     sheets.save_state(GMAIL_HISTORY_KEY, latest)
     return logged
+
+
+def reverse_card_transaction(sheets: SheetsService, reversal: CardReversal, email_id: str) -> None:
+    """Delete the latest logged row matching a reversal. Each reversal email is applied once."""
+    state_key = f"reversal:{email_id}"
+    if sheets.load_state(state_key):
+        return
+    sheets.save_state(state_key, "applied")
+
+    card_names = sheets.load_card_names_by_ending()
+    named_card = card_names.get(reversal.ending)
+    merchant = reversal.merchant.casefold()
+    matches = [
+        row_number
+        for row_number, txn in sheets.load_transactions_with_rows()
+        if txn.amount == reversal.amount
+        and txn.date == reversal.day
+        and txn.merchant.strip().casefold() == merchant
+        and (txn.card == named_card or txn.card.endswith(f"ending {reversal.ending}"))
+    ]
+    if not matches:
+        logger.warning(
+            "No logged transaction matches reversal of %.2f at %s on %s",
+            reversal.amount,
+            reversal.merchant,
+            reversal.day,
+        )
+        return
+    sheets.delete_transaction(max(matches))
 
 
 def recategorize_fallback(

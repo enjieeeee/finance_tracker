@@ -8,11 +8,13 @@ from googleapiclient.errors import HttpError
 
 from config import Settings
 from gmail_service import (
+    CardReversal,
     EmailMessage,
     decode_push_history_id,
     extract_body,
     is_relevant,
     parse_card_alert,
+    parse_card_reversal,
     parse_paynow_amount,
     parse_paynow_recipient,
     parse_qr_payment,
@@ -51,6 +53,12 @@ class FakeSheets:
 
     def load_transactions(self):
         return list(self.transactions)
+
+    def load_transactions_with_rows(self):
+        return [(index, txn) for index, txn in enumerate(self.transactions, start=2)]
+
+    def delete_transaction(self, row_number):
+        del self.transactions[row_number - 2]
 
     def load_state(self, key):
         return self.state.get(key)
@@ -114,6 +122,69 @@ def test_card_alert_is_logged_under_others_with_parsed_fields():
 
 def test_card_alert_regex_rejects_other_emails():
     assert parse_card_alert("Your OTP is 123456") is None
+
+
+REVERSAL_BODY = (
+    "A transaction of 20.00 SGD made with your UOB card ending 6582 on 28 Oct 26, 8:11PM "
+    "at Gopay-Gojek has been reversed.\nUOB EMAIL DISCLAIMER"
+)
+
+
+def card_txn(amount, merchant, day, card="UOB Card ending 6582"):
+    return Transaction(
+        date=day,
+        time="20:11",
+        user="En Jie",
+        category="Others",
+        amount=amount,
+        currency="SGD",
+        card=card,
+        merchant=merchant,
+        raw=f"{merchant} {amount} {day}",
+    )
+
+
+def test_reversal_email_is_parsed():
+    reversal = parse_card_reversal(REVERSAL_BODY)
+    assert reversal == CardReversal(
+        amount=20.0, ending="6582", merchant="Gopay-Gojek", day=date(2026, 10, 28)
+    )
+
+
+def test_reversal_deletes_matching_row_and_appends_nothing():
+    original = card_txn(20.0, "Gopay-Gojek", date(2026, 10, 28))
+    sheets = FakeSheets(transactions=[original], state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(
+        ids=["r1"],
+        latest="200",
+        messages={"r1": email("r1", "Your transaction has been reversed", REVERSAL_BODY)},
+    )
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
+    assert sheets.transactions == []
+
+
+def test_reversal_removes_only_the_latest_identical_purchase():
+    earlier = card_txn(20.0, "Gopay-Gojek", date(2026, 10, 28))
+    later = card_txn(20.0, "Gopay-Gojek", date(2026, 10, 28))
+    sheets = FakeSheets(transactions=[earlier, later], state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(
+        ids=["r1"],
+        latest="200",
+        messages={"r1": email("r1", "Your transaction has been reversed", REVERSAL_BODY)},
+    )
+    sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert sheets.transactions == [earlier]
+
+
+def test_reversal_without_matching_row_is_ignored():
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(
+        ids=["r1"],
+        latest="200",
+        messages={"r1": email("r1", "Your transaction has been reversed", REVERSAL_BODY)},
+    )
+    assert sync_gmail(gmail, sheets, make_settings(), "999", NOW) == []
+    assert sheets.transactions == []
 
 
 def test_paynow_recipient_is_extracted_without_uen_suffix():

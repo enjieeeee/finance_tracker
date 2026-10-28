@@ -37,6 +37,11 @@ QR_OUTGOING = re.compile(
     r"You made a NETS QR payment of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) to (.+?) on your a/c ending",
     re.IGNORECASE,
 )
+CARD_REVERSAL = re.compile(
+    r"A transaction of (?:(?:SGD|S\$)\s?)?([\d,]+(?:\.\d+)?)(?:\s?SGD)? made with your UOB card "
+    r"ending (\d{4}) on (\d{1,2} [A-Za-z]{3} \d{2}), [\d:]+\s?[AP]M at (.+?) has been reversed",
+    re.IGNORECASE,
+)
 TRANSIT_CHARGE = re.compile(
     r"accumulated transit transactions of (?:SGD|S\$)\s?([\d,]+(?:\.\d+)?) has been billed to your "
     r"(.+?) ending (\d{4}) on (\d{2}/\d{2}/\d{2})",
@@ -64,6 +69,14 @@ class CardAlert:
     merchant: str
     day: date
     category: str = ""
+
+
+@dataclass(frozen=True)
+class CardReversal:
+    amount: float
+    ending: str
+    merchant: str
+    day: date
 
 
 def decode_push_history_id(push_body: dict) -> str:
@@ -107,6 +120,19 @@ def parse_card_alert(body: str) -> CardAlert | None:
         ending=match.group(3),
         merchant=match.group(5).strip(),
         day=datetime.strptime(match.group(4), "%d/%m/%y").date(),
+    )
+
+
+def parse_card_reversal(body: str) -> CardReversal | None:
+    """A reversed card transaction from a UOB reversal email, or None for any other email."""
+    match = CARD_REVERSAL.search(body)
+    if not match:
+        return None
+    return CardReversal(
+        amount=float(match.group(1).replace(",", "")),
+        ending=match.group(2),
+        merchant=match.group(4).strip(),
+        day=datetime.strptime(match.group(3), "%d %b %y").date(),
     )
 
 
