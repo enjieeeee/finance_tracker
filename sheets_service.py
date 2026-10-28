@@ -27,6 +27,7 @@ TRANSACTION_HEADERS = [
     "Raw Message",
     "Logged At",
 ]
+CATEGORY_COLUMN = TRANSACTION_HEADERS.index("Category") + 1
 CARD_HEADERS = [
     "Card Holder",
     "Card",
@@ -183,8 +184,20 @@ class SheetsService:
         return self._tabs[name]
 
     def load_transactions(self) -> list[Transaction]:
+        return [t for _, t in self.load_transactions_with_rows()]
+
+    def load_transactions_with_rows(self) -> list[tuple[int, Transaction]]:
+        """(sheet row number, transaction) pairs; row 1 is the header."""
         rows = self._tab(TRANSACTIONS_TAB).get_all_records()
-        return [t for t in (row_to_transaction(r) for r in rows) if t is not None]
+        pairs = []
+        for index, row in enumerate(rows, start=2):
+            txn = row_to_transaction(row)
+            if txn is not None:
+                pairs.append((index, txn))
+        return pairs
+
+    def update_transaction_category(self, row_number: int, category: str) -> None:
+        self._tab(TRANSACTIONS_TAB).update_cell(row_number, CATEGORY_COLUMN, category)
 
     def append_transaction(self, t: Transaction) -> None:
         self._tab(TRANSACTIONS_TAB).append_row(

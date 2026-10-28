@@ -3,7 +3,7 @@
 A Telegram bot for a couple. It records expenses from Gmail alerts into a shared Google Sheet, answers history queries with slash commands, recommends credit cards, sends billing reminders, and draws monthly spending charts. It makes no paid LLM API calls.
 
 ## Features
-- **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged.
+- **Gmail ingestion**: PayNow outgoing transfers and UOB card transaction alerts are parsed with regex and appended to the `Transactions` tab. Unrecognised emails are skipped and logged. Card and NETS QR transactions are categorised by merchant: keyword rules in `categorizer.py` first, then a Groq LLM call (`GROQ_API_KEY`) for unmatched merchants, falling back to `Others`. PayNow transfers always stay `PAYNOW`.
 - **Query commands**: `/search`, `/statement`, `/total`, `/cards`, `/billing` read the sheet directly.
 - **Reminders**: daily 09:00 (`TIMEZONE`) alerts from the `Billing` tab, plus a Gmail token reminder one day before its assumed 7-day expiry.
 - **Dashboard**: `/dashboard 2026-10` sends bar charts by category and by card.
@@ -24,7 +24,7 @@ Example `Cards` row: `En Jie | UOB Lady's Card | 2881 | UOB | ...`. `Card Number
 
 Copy the sheet ID from its URL: `docs.google.com/spreadsheets/d/<SHEET_ID>/edit`.
 
-**Migrating an existing sheet:** rename the old `Merchant/Notes` header to `Merchant` and delete any `Notes` column in the Transactions tab, so the header matches the table above. Categories must be one of `Groceries, Dining, Transport, Shopping, Bills, Others`; older rows are left as-is.
+**Migrating an existing sheet:** rename the old `Merchant/Notes` header to `Merchant` and delete any `Notes` column in the Transactions tab, so the header matches the table above. Categories must be one of `Groceries, Dining, Transport, Shopping, Bills, Others` (`PAYNOW` is reserved for PayNow transfers); older rows are left as-is until you run `/recategorize apply`.
 
 ## 2. Google service account
 1. In Google Cloud Console, create a project and enable the **Google Sheets API**.
@@ -133,6 +133,7 @@ Every commit runs `ruff check --fix` and `ruff format`. Every push runs `ruff ch
 - `/total [months]`: total spending for the current month; with a number N, one total per month for the last N months (e.g. `/total 3`).
 - `/cards`: compact card summary (holder, category rules, key exceptions) from the `Cards` tab, duplicate cards merged.
 - `/billing`: billing cycle summary from the `Billing` tab.
+- `/recategorize [apply]`: re-runs the merchant categoriser on `Others` rows. Without `apply` it only previews the changes; with `apply` it writes them to the sheet. Also works in the terminal console (`dev_console.py`).
 - `/dashboard [YYYY-MM]`: monthly spending charts.
 - `/gmailrefreshed`: record that the Gmail refresh token was refreshed today; the bot reminds the configured reminder chat six days later.
 - `/clear`: no-op, kept for compatibility (the bot keeps no chat history).

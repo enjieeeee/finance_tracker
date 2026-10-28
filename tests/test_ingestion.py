@@ -332,7 +332,7 @@ def test_uob_qr_payment_template_is_logged_as_bank_transfer():
     logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
     assert len(logged) == 1
     assert logged[0].amount == 5.0
-    assert logged[0].category == "Others"
+    assert logged[0].category == "Dining"
     assert logged[0].card == "No Card/Bank Transfer"
     assert logged[0].merchant == "HUA DEE-BEDOK"
 
@@ -351,5 +351,28 @@ def test_uob_transit_template_is_logged_on_card_with_billing_date():
     assert logged[0].amount == 16.79
     assert logged[0].card == "UOB Lady's Card"
     assert logged[0].merchant == "SMRT CORPORATION LTD"
-    assert logged[0].category == "transport"
+    assert logged[0].category == "Transport"
     assert logged[0].date == date(2026, 10, 13)
+
+
+def test_card_alert_merchant_is_sorted_by_keyword_rules():
+    body = (
+        "A transaction of SGD 12.30 was made with your UOB Card ending 2881 on 19/10/26 "
+        "at NTUC FAIRPRICE BEDOK. If unauthorised, call 24/7 Fraud Hotline now"
+    )
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    gmail = FakeGmail(
+        ids=["m1"], latest="200", messages={"m1": email("m1", "UOB - Transaction Alert", body)}
+    )
+    logged = sync_gmail(gmail, sheets, make_settings(groq_api_key=""), "999", NOW)
+    assert logged[0].category == "Groceries"
+
+
+def test_paynow_transfer_stays_paynow_even_when_recipient_matches_a_keyword():
+    sheets = FakeSheets(state={GMAIL_HISTORY_KEY: "100"})
+    body = "You made a PayNow transfer of SGD 42.50 to NTUC FairPrice on your a/c ending 3606"
+    gmail = FakeGmail(
+        ids=["m1"], latest="200", messages={"m1": email("m1", "PayNow sent", body=body)}
+    )
+    logged = sync_gmail(gmail, sheets, make_settings(), "999", NOW)
+    assert logged[0].category == "PAYNOW"

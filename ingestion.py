@@ -3,6 +3,7 @@ from datetime import datetime
 
 from googleapiclient.errors import HttpError
 
+from categorizer import FALLBACK_CATEGORY, categorize_merchant
 from config import Settings
 from gmail_service import (
     CardAlert,
@@ -20,7 +21,6 @@ from sheets_service import SheetsService, Transaction
 logger = logging.getLogger(__name__)
 
 GMAIL_HISTORY_KEY = "gmail_history_id"
-FALLBACK_CATEGORY = "Others"
 PAYNOW_CATEGORY = "PAYNOW"
 PAYNOW_CURRENCY = "SGD"
 PAYNOW_CARD = "No Card/Bank Transfer"
@@ -64,7 +64,8 @@ def build_card_transaction(
         date=alert.day,
         time=when.strftime("%H:%M"),
         user=settings.gmail_owner_name,
-        category=alert.category or FALLBACK_CATEGORY,
+        category=alert.category
+        or categorize_merchant(alert.merchant, settings.groq_api_key, settings.groq_model),
         amount=alert.amount,
         currency=PAYNOW_CURRENCY,
         card=card,
@@ -118,7 +119,12 @@ def sync_gmail(
         elif qr is not None:
             qr_amount, payee = qr
             txn = build_paynow_transaction(
-                email, qr_amount, settings, now, merchant=payee, category=FALLBACK_CATEGORY
+                email,
+                qr_amount,
+                settings,
+                now,
+                merchant=payee,
+                category=categorize_merchant(payee, settings.groq_api_key, settings.groq_model),
             )
         else:
             alert = parse_card_alert(email.body) or parse_transit_charge(email.body)
@@ -137,3 +143,20 @@ def sync_gmail(
 
     sheets.save_state(GMAIL_HISTORY_KEY, latest)
     return logged
+
+
+def recategorize_fallback(
+    sheets: SheetsService, api_key: str, model: str, apply: bool
+) -> list[tuple[Transaction, str]]:
+    """Re-run the categorizer on rows still in FALLBACK_CATEGORY. Writes only when apply is True."""
+    changes = []
+    for row_number, txn in sheets.load_transactions_with_rows():
+        if txn.category != FALLBACK_CATEGORY:
+            continue
+        new_category = categorize_merchant(txn.merchant, api_key, model)
+        if new_category == txn.category:
+            continue
+        if apply:
+            sheets.update_transaction_category(row_number, new_category)
+        changes.append((txn, new_category))
+    return changes

@@ -22,7 +22,7 @@ from assistant import Assistant
 from chart_generator import render_dashboard
 from config import Settings, load_settings
 from gmail_service import GmailClient, decode_push_history_id
-from ingestion import sync_gmail
+from ingestion import recategorize_fallback, sync_gmail
 from queries import (
     SEARCH_USAGE,
     STATEMENT_USAGE,
@@ -65,10 +65,12 @@ HELP_TEXT = (
     "/dashboard [YYYY-MM] - spending charts for a month\n"
     "/cards - card rules and exceptions\n"
     "/billing - statement closing and due days\n"
+    "/recategorize [apply] - re-sort 'Others' transactions by merchant (preview unless 'apply')\n"
     "/gmailrefreshed - record that the Gmail refresh token was refreshed today\n"
     "/help - this list\n"
     "/clear - nothing to clear (no chat memory)"
 )
+RECATEGORIZE_USAGE = "Usage: /recategorize [apply]"
 
 
 def allowed_only(handler):
@@ -197,6 +199,27 @@ async def run_billing(message, context, args: list[str]) -> None:
     await _reply(message, format_billing(rules))
 
 
+async def run_recategorize(message, context, args: list[str]) -> None:
+    settings: Settings = context.bot_data["settings"]
+    sheets: SheetsService = context.bot_data["sheets"]
+    if args not in ([], ["apply"]):
+        await message.reply_text(RECATEGORIZE_USAGE)
+        return
+    apply = args == ["apply"]
+    changes = await asyncio.to_thread(
+        recategorize_fallback, sheets, settings.groq_api_key, settings.groq_model, apply
+    )
+    if not changes:
+        await message.reply_text("No 'Others' transactions to recategorise.")
+        return
+    lines = [f"{txn.date:%d %b %Y} | {txn.merchant} -> {category}" for txn, category in changes]
+    verb = "Updated" if apply else "Would update"
+    header = f"{verb} {len(changes)} transaction(s)."
+    if not apply:
+        header += " Send /recategorize apply to write these changes."
+    await _reply(message, "\n".join([header, *lines]))
+
+
 def _format_saved(txn: Transaction) -> str:
     return (
         f"{txn.date:%d %b %Y} {txn.time} |{txn.card}  "
@@ -256,6 +279,7 @@ total_command = _command_handler(run_total)
 cards_command = _command_handler(run_cards)
 billing_command = _command_handler(run_billing)
 dashboard_command = _command_handler(run_dashboard)
+recategorize_command = _command_handler(run_recategorize)
 
 
 async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -325,6 +349,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("cards", cards_command))
     application.add_handler(CommandHandler("billing", billing_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
+    application.add_handler(CommandHandler("recategorize", recategorize_command))
     application.add_handler(CommandHandler("gmailrefreshed", gmail_refreshed))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.job_queue.run_daily(
