@@ -102,6 +102,7 @@ gcloud run deploy finance-agent --source . --region asia-southeast1 `
 - Use `--set-secrets` with Secret Manager for the token and keys in production.
 - `--min-instances 1` keeps the built-in reminder scheduler running. It is not free-tier, so review the cost.
 - After the first deploy, set `WEBHOOK_URL` to the service URL and redeploy. The bot registers its webhook on startup.
+- Each new deployment (a new Cloud Run revision) sends allowed users a "redeployed" Telegram message on startup. The revision name is stored in the `State` tab under `deployed_revision`, so restarts of the same revision stay silent.
 - To check logs: `gcloud run services logs tail finance-agent --region asia-southeast1`.
 - PowerShell equivalent:
   ```powershell

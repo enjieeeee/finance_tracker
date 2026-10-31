@@ -235,6 +235,27 @@ async def _notify_allowed_users(bot, settings: Settings, text: str) -> None:
             logger.exception("Could not notify user %s", user_id)
 
 
+DEPLOY_STATE_KEY = "deployed_revision"
+
+
+async def _announce_deployment(telegram_app: Application, settings: Settings) -> None:
+    """Notify allowed users once per new Cloud Run revision."""
+    revision = os.environ.get("K_REVISION", "local")
+    sheets: SheetsService = telegram_app.bot_data["sheets"]
+    try:
+        if await asyncio.to_thread(sheets.load_state, DEPLOY_STATE_KEY) == revision:
+            return
+        await _notify_allowed_users(
+            telegram_app.bot,
+            settings,
+            f"🚀 Finance bot has been redeployed (revision {revision}) at "
+            f"{datetime.now(settings.tz):%d %b %Y %H:%M}.",
+        )
+        await asyncio.to_thread(sheets.save_state, DEPLOY_STATE_KEY, revision)
+    except Exception:
+        logger.exception("Could not announce deployment")
+
+
 async def run_dashboard(message, context, args: list[str]) -> None:
     settings: Settings = context.bot_data["settings"]
     sheets: SheetsService = context.bot_data["sheets"]
@@ -389,6 +410,7 @@ def create_app() -> FastAPI:
             secret_token=settings.webhook_secret,
             allowed_updates=Update.ALL_TYPES,
         )
+        await _announce_deployment(telegram_app, settings)
         yield
         await telegram_app.stop()
         await telegram_app.shutdown()
