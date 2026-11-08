@@ -133,7 +133,12 @@ def split_message(text: str, limit: int = TELEGRAM_MAX_CHARS) -> list[str]:
     """Split on line breaks so each chunk fits Telegram's message limit."""
     chunks: list[str] = []
     current = ""
-    for line in text.splitlines():
+    lines = [
+        line[i : i + limit]
+        for line in text.splitlines()
+        for i in range(0, max(len(line), 1), limit)
+    ]
+    for line in lines:
         candidate = f"{current}\n{line}" if current else line
         if len(candidate) > limit and current:
             chunks.append(current)
