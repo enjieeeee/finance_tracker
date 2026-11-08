@@ -139,4 +139,6 @@ Every commit runs `ruff check --fix` and `ruff format`. Every push runs `ruff ch
 - `/gmailrefreshed`: record that the Gmail refresh token was refreshed today; the bot reminds the configured reminder chat six days later.
 - `/clear`: no-op, kept for compatibility (the bot keeps no chat history).
 
+To renew the token without publishing the OAuth consent screen, run `.venv/bin/python refresh_gmail_token.py`. It opens a browser consent page (click Allow), then updates `GMAIL_REFRESH_TOKEN` in `.env` and `env.yaml` (timestamped backups saved in `.bak_logs/`, e.g. `.env.2026-11-09_010500.bak`), records today's date in the `State` tab (so `/gmailrefreshed` isn't needed), and asks whether to push the token to Cloud Run. Use `--deploy` / `--no-deploy` to skip the prompt; `--service` and `--region` default to `finance-agent` / `asia-southeast1`. The OAuth client must be a Desktop app (or allow `http://localhost` redirects).
+
 The Gmail reminder date is stored in the spreadsheet's `State` tab. After deploying this feature, send `/gmailrefreshed` today to record your recent token refresh; repeat it whenever you refresh the token. This reminder assumes your Google OAuth setup uses a 7-day refresh-token lifetime (for example, an OAuth consent screen in Testing); refresh-token expiry depends on Google's OAuth settings and can also happen for other reasons.
