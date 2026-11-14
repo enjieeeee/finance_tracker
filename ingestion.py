@@ -109,6 +109,7 @@ def sync_gmail(
 
     logged_raw = {t.raw for t in sheets.load_transactions()}
     logged: list[Transaction] = []
+    card_names: dict[str, str] | None = None
     for message_id in dict.fromkeys(message_ids):
         email = gmail.get_email(message_id)
         if email is None or not is_relevant(email.subject, email.body):
@@ -139,7 +140,9 @@ def sync_gmail(
                     "Gmail message %s is not a known transaction format; skipping", message_id
                 )
                 continue
-            card = sheets.load_card_names_by_ending().get(alert.ending, alert.card)
+            if card_names is None:
+                card_names = sheets.load_card_names_by_ending()
+            card = card_names.get(alert.ending, alert.card)
             txn = build_card_transaction(email, alert, card, settings, now)
         if txn.raw in logged_raw:
             continue
