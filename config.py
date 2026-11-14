@@ -24,6 +24,7 @@ class Settings:
     gmail_push_token: str = ""
     gmail_pubsub_topic: str = ""
     gmail_owner_name: str = "Email"
+    gmail_label: str = "INBOX"
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
 
@@ -62,6 +63,7 @@ def load_settings() -> Settings:
         gmail_push_token=os.getenv("GMAIL_PUSH_TOKEN", "").strip(),
         gmail_pubsub_topic=os.getenv("GMAIL_PUBSUB_TOPIC", "").strip(),
         gmail_owner_name=os.getenv("GMAIL_OWNER_NAME", "Email").strip(),
+        gmail_label=os.getenv("GMAIL_LABEL", "INBOX").strip() or "INBOX",
         groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
         groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip(),
     )

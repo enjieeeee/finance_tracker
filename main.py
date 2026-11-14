@@ -354,7 +354,10 @@ def build_application(settings: Settings) -> Application:
         sheets=sheets,
         gmail=(
             GmailClient(
-                settings.gmail_client_id, settings.gmail_client_secret, settings.gmail_refresh_token
+                settings.gmail_client_id,
+                settings.gmail_client_secret,
+                settings.gmail_refresh_token,
+                settings.gmail_label,
             )
             if settings.gmail_enabled
             else None

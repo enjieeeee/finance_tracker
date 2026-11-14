@@ -50,6 +50,7 @@ TRANSIT_CHARGE = re.compile(
 TRANSIT_MERCHANT = "SMRT CORPORATION LTD"
 TRANSIT_CATEGORY = "Transport"
 MAX_BODY_CHARS = 4000
+RETRIES = 3  # googleapiclient backs off exponentially on 429, rate-limit 403 and 5xx
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,9 @@ def extract_body(payload: dict) -> str:
 
 
 class GmailClient:
-    def __init__(self, client_id: str, client_secret: str, refresh_token: str):
+    def __init__(
+        self, client_id: str, client_secret: str, refresh_token: str, label: str = "INBOX"
+    ):
         creds = Credentials(
             token=None,
             refresh_token=refresh_token,
@@ -198,13 +201,41 @@ class GmailClient:
             scopes=SCOPES,
         )
         self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        self._label = label or "INBOX"
+        self._label_id: str | None = None
+
+    def _resolve_label_id(self) -> str:
+        """Watch/history need a label ID; system labels like INBOX are their own ID."""
+        if self._label_id is None:
+            if self._label.isupper():
+                self._label_id = self._label
+            else:
+                labels = (
+                    self._service.users()
+                    .labels()
+                    .list(userId="me")
+                    .execute(num_retries=RETRIES)
+                    .get("labels", [])
+                )
+                match = next((x for x in labels if x["name"].lower() == self._label.lower()), None)
+                if match is None:
+                    raise RuntimeError(f"Gmail label {self._label!r} not found")
+                self._label_id = match["id"]
+        return self._label_id
 
     def watch(self, topic: str) -> str:
         """Start or renew push notifications to a Pub/Sub topic. Returns the current historyId."""
         response = (
             self._service.users()
-            .watch(userId="me", body={"topicName": topic, "labelIds": ["INBOX"]})
-            .execute()
+            .watch(
+                userId="me",
+                body={
+                    "topicName": topic,
+                    "labelIds": [self._resolve_label_id()],
+                    "labelFilterBehavior": "INCLUDE",
+                },
+            )
+            .execute(num_retries=RETRIES)
         )
         return str(response["historyId"])
 
@@ -221,10 +252,10 @@ class GmailClient:
                     userId="me",
                     startHistoryId=start_history_id,
                     historyTypes=["messageAdded"],
-                    labelId="INBOX",
+                    labelId=self._resolve_label_id(),
                     pageToken=page_token,
                 )
-                .execute()
+                .execute(num_retries=RETRIES)
             )
             for record in response.get("history", []):
                 for added in record.get("messagesAdded", []):
@@ -240,7 +271,7 @@ class GmailClient:
                 self._service.users()
                 .messages()
                 .get(userId="me", id=message_id, format="full")
-                .execute()
+                .execute(num_retries=RETRIES)
             )
         except HttpError as exc:
             if exc.resp.status != 404:
