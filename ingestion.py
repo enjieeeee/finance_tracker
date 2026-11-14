@@ -111,7 +111,14 @@ def sync_gmail(
     logged: list[Transaction] = []
     card_names: dict[str, str] | None = None
     for message_id in dict.fromkeys(message_ids):
-        email = gmail.get_email(message_id)
+        try:
+            email = gmail.get_email(message_id)
+        except HttpError as exc:
+            if not is_gmail_rate_limited(exc):
+                raise
+            # Baseline isn't advanced, so the next push retries; logged_raw dedupes re-runs.
+            logger.warning("Gmail quota exceeded mid-sync; baseline %s kept", start)
+            return logged
         if email is None or not is_relevant(email.subject, email.body):
             continue
         amount = parse_paynow_amount(email.body)
